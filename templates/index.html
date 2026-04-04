@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Catálogos Inteligente - V3.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .status-badge { @apply px-3 py-1 rounded-full text-xs font-semibold; }
+        .card { @apply bg-white rounded-lg shadow-lg p-6; }
+        .btn { @apply px-4 py-2 rounded-lg font-semibold transition-all duration-200 cursor-pointer; }
+        .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700; }
+        .btn-success { @apply bg-green-600 text-white hover:bg-green-700; }
+        .btn-danger { @apply bg-red-600 text-white hover:bg-red-700; }
+        .btn-warning { @apply bg-yellow-600 text-white hover:bg-yellow-700; }
+        .tab-active { @apply border-b-2 border-blue-600 text-blue-600; }
+        .hidden { display: none; }
+        
+        .key-bar {
+            height: 24px;
+            background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+            border-radius: 12px;
+            transition: width 0.5s ease;
+        }
+        
+        .key-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 16px;
+            color: white;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .key-card.inactive {
+            background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
+            opacity: 0.6;
+        }
+        
+        .key-card.warning {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+        
+        .key-card.danger {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-white shadow-md sticky top-0 z-50">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="text-3xl">🤖</div>
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Sistema de Catálogos Inteligente</h1>
+                        <p class="text-sm text-gray-500">20 API Keys • 30.000 requisições/dia • V3.0</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <div id="status-monitor" class="status-badge bg-gray-200 text-gray-700">
+                        ⏸️ Carregando...
+                    </div>
+                    <button onclick="atualizarTudo()" class="btn btn-primary text-sm">
+                        🔄 Atualizar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container mx-auto px-6 py-8">
+        
+        <!-- Abas de Navegação -->
+        <div class="bg-white rounded-lg shadow-lg mb-8">
+            <nav class="flex border-b overflow-x-auto">
+                <button class="tab-btn tab-active px-6 py-4 font-semibold whitespace-nowrap" onclick="abrirAba('dashboard')">
+                    📊 Dashboard
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold text-gray-500 hover:text-gray-700 whitespace-nowrap" onclick="abrirAba('produtos')">
+                    📦 Produtos
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold text-gray-500 hover:text-gray-700 whitespace-nowrap" onclick="abrirAba('mudancas')">
+                    💰 Mudanças
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold text-gray-500 hover:text-gray-700 whitespace-nowrap" onclick="abrirAba('relatorios')">
+                    📥 Relatórios
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold text-gray-500 hover:text-gray-700 whitespace-nowrap" onclick="abrirAba('config')">
+                    ⚙️ Configurações
+                </button>
+            </nav>
+        </div>
+
+        <!-- ABA: DASHBOARD -->
+        <div id="aba-dashboard" class="aba-content">
+            
+            <!-- Cards de Estatísticas -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                
+                <div class="card hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-semibold">Total de Produtos</p>
+                            <p id="stat-produtos" class="text-3xl font-bold text-blue-600">0</p>
+                        </div>
+                        <div class="text-4xl">📦</div>
+                    </div>
+                </div>
+
+                <div class="card hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-semibold">Fornecedores</p>
+                            <p id="stat-fornecedores" class="text-3xl font-bold text-green-600">0</p>
+                        </div>
+                        <div class="text-4xl">🏢</div>
+                    </div>
+                </div>
+
+                <div class="card hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-semibold">Arquivos</p>
+                            <p id="stat-arquivos" class="text-3xl font-bold text-purple-600">0</p>
+                        </div>
+                        <div class="text-4xl">📄</div>
+                    </div>
+                </div>
+
+                <div class="card hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-semibold">Mudanças (30d)</p>
+                            <p id="stat-mudancas" class="text-3xl font-bold text-orange-600">0</p>
+                        </div>
+                        <div class="text-4xl">💰</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Status das API Keys em Tempo Real -->
+            <div class="card mb-8">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center justify-between">
+                    <span><span class="mr-2">🔑</span> Status das 20 API Keys - Tempo Real</span>
+                    <span id="key-ativa-badge" class="text-sm font-normal px-3 py-1 bg-green-100 text-green-800 rounded-full">
+                        Usando: Key #1
+                    </span>
+                </h2>
+                <div id="keys-status" class="space-y-3">
+                    <div class="text-gray-500 text-center py-8">
+                        <div class="text-4xl mb-2">⏳</div>
+                        <p>Carregando status das keys...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ações Rápidas -->
+            <div class="card">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                    <span class="mr-2">🚀</span> Ações Rápidas
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button onclick="varreduraRapida()" class="btn btn-success py-6 text-lg hover:scale-105 transform transition">
+                        <div class="text-2xl mb-2">⚡</div>
+                        <div class="font-bold">Varredura Rápida</div>
+                        <p class="text-sm font-normal mt-1 opacity-90">Atualiza apenas mudanças</p>
+                    </button>
+                    
+                    <button onclick="varreduraCompleta()" class="btn btn-warning py-6 text-lg hover:scale-105 transform transition">
+                        <div class="text-2xl mb-2">🔄</div>
+                        <div class="font-bold">Varredura Completa</div>
+                        <p class="text-sm font-normal mt-1 opacity-90">Reprocessa tudo do zero</p>
+                    </button>
+                    
+                    <button onclick="iniciarMonitoramento()" id="btn-monitorar" class="btn btn-primary py-6 text-lg hover:scale-105 transform transition">
+                        <div class="text-2xl mb-2">👀</div>
+                        <div class="font-bold">Ativar Monitoramento</div>
+                        <p class="text-sm font-normal mt-1 opacity-90">Detecta mudanças 24/7</p>
+                    </button>
+                    
+                    <button onclick="pararMonitoramento()" id="btn-parar" class="btn btn-danger py-6 text-lg hover:scale-105 transform transition" disabled>
+                        <div class="text-2xl mb-2">⏹️</div>
+                        <div class="font-bold">Parar Monitoramento</div>
+                        <p class="text-sm font-normal mt-1 opacity-90">Desativa detecção</p>
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ABA: PRODUTOS -->
+        <div id="aba-produtos" class="aba-content hidden">
+            <div class="card">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">🔍 Filtros Avançados</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <input 
+                        type="text" 
+                        id="busca-produtos" 
+                        placeholder="🔍 Buscar código ou descrição..."
+                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                    >
+                    
+                    <select id="filtro-fornecedor" class="px-4 py-2 border border-gray-300 rounded-lg">
+                        <option value="">🏢 Todos os fornecedores</option>
+                    </select>
+
+                    <div class="flex space-x-2">
+                        <input 
+                            type="number" 
+                            id="preco-min" 
+                            placeholder="R$ Mín"
+                            step="0.01"
+                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg"
+                        >
+                        <input 
+                            type="number" 
+                            id="preco-max" 
+                            placeholder="R$ Máx"
+                            step="0.01"
+                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg"
+                        >
+                    </div>
+                </div>
+
+                <div class="flex space-x-2 mb-6">
+                    <button onclick="aplicarFiltros()" class="btn btn-primary flex-1">
+                        🔍 Aplicar Filtros
+                    </button>
+                    <button onclick="limparFiltros()" class="btn bg-gray-500 text-white hover:bg-gray-600">
+                        🗑️ Limpar
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Código</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Descrição</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Fornecedor</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Preço</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Qtd/Cx</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-produtos" class="divide-y divide-gray-200">
+                            <tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="paginacao" class="flex items-center justify-between mt-4"></div>
+            </div>
+        </div>
+
+        <!-- ABA: MUDANÇAS -->
+        <div id="aba-mudancas" class="aba-content hidden">
+            <div class="card">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-bold text-gray-800">💰 Histórico de Mudanças de Preço</h2>
+                    <button onclick="exportarMudancas()" class="btn btn-primary">
+                        📥 Exportar Excel
+                    </button>
+                </div>
+
+                <div id="lista-mudancas" class="space-y-4">
+                    <div class="text-center py-8 text-gray-500">Carregando...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA: RELATÓRIOS -->
+        <div id="aba-relatorios" class="aba-content hidden">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                <div class="card hover:shadow-xl transition-shadow text-center cursor-pointer" onclick="window.location='/api/exportar/excel'">
+                    <div class="text-5xl mb-4">📄</div>
+                    <h3 class="font-bold text-lg mb-2">Excel Completo</h3>
+                    <p class="text-sm text-gray-600 mb-4">Todos os produtos</p>
+                    <div class="btn btn-primary w-full">📥 Baixar</div>
+                </div>
+
+                <div class="card hover:shadow-xl transition-shadow text-center cursor-pointer" onclick="exportarMudancas()">
+                    <div class="text-5xl mb-4">💰</div>
+                    <h3 class="font-bold text-lg mb-2">Mudanças de Preço</h3>
+                    <p class="text-sm text-gray-600 mb-4">Histórico completo</p>
+                    <div class="btn btn-primary w-full">📥 Baixar</div>
+                </div>
+
+                <div class="card hover:shadow-xl transition-shadow text-center">
+                    <div class="text-5xl mb-4">🏢</div>
+                    <h3 class="font-bold text-lg mb-2">Por Fornecedor</h3>
+                    <select id="rel-fornecedor" class="w-full px-4 py-2 border mb-4 rounded-lg">
+                        <option value="">Escolha...</option>
+                    </select>
+                    <div class="btn btn-primary w-full" onclick="alert('Em breve!')">📥 Baixar</div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ABA: CONFIGURAÇÕES -->
+        <div id="aba-config" class="aba-content hidden">
+            <div class="card">
+                <h2 class="text-xl font-bold text-gray-800 mb-6">⚙️ Configurações do Sistema</h2>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">
+                        📁 Pasta de Catálogos
+                    </label>
+                    <div class="flex space-x-2">
+                        <input 
+                            type="text" 
+                            id="config-pasta" 
+                            placeholder="C:\Documentos\Catalogos"
+                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg"
+                        >
+                        <button onclick="salvarPasta()" class="btn btn-primary">
+                            💾 Salvar
+                        </button>
+                    </div>
+                    <p id="pasta-status" class="text-xs text-gray-500 mt-2">
+                        Carregando...
+                    </p>
+                </div>
+
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <h3 class="font-bold text-blue-800 mb-2">ℹ️ Informações do Sistema</h3>
+                    <ul class="text-sm text-blue-700 space-y-1">
+                        <li>• 20 API Keys configuradas</li>
+                        <li>• Capacidade: 30.000 requisições/dia</li>
+                        <li>• Varredura inteligente ativa</li>
+                        <li>• Cache otimizado</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let paginaAtual = 1;
+        
+        // Funções de navegação
+        function abrirAba(nome) {
+            document.querySelectorAll('.aba-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`aba-${nome}`).classList.remove('hidden');
+            
+            document.querySelectorAll('.tab-btn').forEach(el => {
+                el.classList.remove('tab-active', 'text-blue-600', 'border-blue-600');
+                el.classList.add('text-gray-500');
+            });
+            event.target.classList.add('tab-active', 'text-blue-600');
+            event.target.classList.remove('text-gray-500');
+            
+            if (nome === 'produtos') carregarProdutos();
+            if (nome === 'mudancas') carregarMudancas();
+            if (nome === 'relatorios') carregarFornecedoresRelatorio();
+        }
+        
+        // Atualizar status
+        async function atualizarStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                const statusEl = document.getElementById('status-monitor');
+                if (data.monitoramento_ativo) {
+                    statusEl.className = 'status-badge bg-green-100 text-green-800';
+                    statusEl.innerHTML = '👀 Monitorando';
+                    document.getElementById('btn-monitorar').disabled = true;
+                    document.getElementById('btn-parar').disabled = false;
+                } else if (data.processando) {
+                    statusEl.className = 'status-badge bg-yellow-100 text-yellow-800';
+                    statusEl.innerHTML = '⚙️ Processando';
+                } else {
+                    statusEl.className = 'status-badge bg-gray-200 text-gray-700';
+                    statusEl.innerHTML = '⏸️ Parado';
+                    document.getElementById('btn-monitorar').disabled = false;
+                    document.getElementById('btn-parar').disabled = true;
+                }
+                
+                if (data.pasta_monitorada) {
+                    document.getElementById('config-pasta').value = data.pasta_monitorada;
+                    document.getElementById('pasta-status').textContent = `Pasta configurada: ${data.pasta_monitorada}`;
+                }
+                
+                if (data.estatisticas) {
+                    document.getElementById('stat-produtos').textContent = data.estatisticas.total_produtos || 0;
+                    document.getElementById('stat-fornecedores').textContent = data.estatisticas.total_fornecedores || 0;
+                    document.getElementById('stat-arquivos').textContent = data.estatisticas.arquivos_processados || 0;
+                    document.getElementById('stat-mudancas').textContent = data.estatisticas.mudancas_30_dias || 0;
+                }
+                
+            } catch (err) {
+                console.error('Erro ao atualizar status:', err);
+            }
+        }
+        
+        // Atualizar status das keys
+        async function atualizarKeysStatus() {
+            try {
+                const res = await fetch('/api/keys/status');
+                const keys = await res.json();
+                
+                if (!keys || keys.length === 0) return;
+                
+                const container = document.getElementById('keys-status');
+                
+                let keyAtiva = keys.find(k => k.ativa);
+                if (keyAtiva) {
+                    document.getElementById('key-ativa-badge').textContent = `Usando: Key #${keyAtiva.numero}`;
+                }
+                
+                container.innerHTML = keys.map(key => {
+                    const percentual = (key.requisicoes_hoje / key.limite * 100).toFixed(1);
+                    let classeCard = 'key-card';
+                    
+                    if (key.quota_atingida) classeCard += ' danger';
+                    else if (percentual >= 90) classeCard += ' warning';
+                    else if (!key.ativa && key.requisicoes_hoje === 0) classeCard += ' inactive';
+                    
+                    return `
+                        <div class="${classeCard}">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-bold">🔑 Key #${key.numero} ${key.ativa ? '(ATIVA)' : ''}</span>
+                                <span class="text-sm">${key.requisicoes_hoje}/${key.limite}</span>
+                            </div>
+                            <div class="w-full bg-white bg-opacity-30 rounded-full h-4 overflow-hidden">
+                                <div class="key-bar" style="width: ${percentual}%"></div>
+                            </div>
+                            <div class="text-xs mt-1 opacity-90">${percentual}% usado</div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (err) {
+                console.error('Erro keys:', err);
+            }
+        }
+        
+        // Carregar produtos
+        async function carregarProdutos() {
+            try {
+                const busca = document.getElementById('busca-produtos').value;
+                const fornecedor = document.getElementById('filtro-fornecedor').value;
+                const precoMin = document.getElementById('preco-min').value;
+                const precoMax = document.getElementById('preco-max').value;
+                
+                const params = new URLSearchParams({
+                    pagina: paginaAtual,
+                    por_pagina: 50,
+                    busca, fornecedor, preco_min: precoMin, preco_max: precoMax
+                });
+                
+                const res = await fetch(`/api/produtos?${params}`);
+                const data = await res.json();
+                
+                const tbody = document.getElementById('tabela-produtos');
+                
+                if (!data.produtos || data.produtos.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">Nenhum produto encontrado</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.produtos.map(p => `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 text-sm font-mono">${p.codigo || ''}</td>
+                        <td class="px-4 py-3 text-sm">${p.descricao || ''}</td>
+                        <td class="px-4 py-3 text-sm">${p.fornecedor || ''}</td>
+                        <td class="px-4 py-3 text-sm font-semibold">R$ ${parseFloat(p.preco_unitario || 0).toFixed(2)}</td>
+                        <td class="px-4 py-3 text-sm">${p.qtd_caixa || '-'}</td>
+                    </tr>
+                `).join('');
+                
+                // Paginação
+                const pag = document.getElementById('paginacao');
+                pag.innerHTML = `
+                    <span class="text-sm text-gray-600">Página ${data.pagina} de ${data.total_paginas} (${data.total} produtos)</span>
+                    <div class="space-x-2">
+                        ${data.pagina > 1 ? '<button onclick="paginaAtual--; carregarProdutos()" class="btn btn-primary btn-sm">← Anterior</button>' : ''}
+                        ${data.pagina < data.total_paginas ? '<button onclick="paginaAtual++; carregarProdutos()" class="btn btn-primary btn-sm">Próxima →</button>' : ''}
+                    </div>
+                `;
+                
+            } catch (err) {
+                console.error('Erro carregar produtos:', err);
+            }
+        }
+        
+        // Carregar fornecedores
+        async function carregarFornecedores() {
+            try {
+                const res = await fetch('/api/fornecedores');
+                const fornecedores = await res.json();
+                
+                const select = document.getElementById('filtro-fornecedor');
+                const selectRel = document.getElementById('rel-fornecedor');
+                
+                const options = fornecedores.map(f => `<option value="${f}">${f}</option>`).join('');
+                
+                select.innerHTML = '<option value="">🏢 Todos os fornecedores</option>' + options;
+                if (selectRel) selectRel.innerHTML = '<option value="">Escolha...</option>' + options;
+                
+            } catch (err) {
+                console.error('Erro carregar fornecedores:', err);
+            }
+        }
+        
+        // Carregar mudanças
+        async function carregarMudancas() {
+            try {
+                const res = await fetch('/api/mudancas-preco');
+                const mudancas = await res.json();
+                
+                const container = document.getElementById('lista-mudancas');
+                
+                if (!mudancas || mudancas.length === 0) {
+                    container.innerHTML = '<div class="text-center py-8 text-gray-500">Nenhuma mudança registrada ainda</div>';
+                    return;
+                }
+                
+                container.innerHTML = mudancas.map(m => {
+                    const perc = parseFloat(m.percentual_mudanca || 0);
+                    const icone = perc > 0 ? '📈' : '📉';
+                    const cor = perc > 0 ? 'text-red-600' : 'text-green-600';
+                    
+                    return `
+                        <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-2">
+                                        <span class="text-2xl">${icone}</span>
+                                        <span class="font-mono text-sm text-gray-600">${m.codigo}</span>
+                                    </div>
+                                    <h3 class="font-semibold text-gray-800 mb-2">${m.descricao}</h3>
+                                    <div class="flex items-center space-x-4 text-sm">
+                                        <span class="text-gray-600">De: R$ ${parseFloat(m.preco_antigo).toFixed(2)}</span>
+                                        <span class="text-gray-400">→</span>
+                                        <span class="text-gray-800 font-semibold">Para: R$ ${parseFloat(m.preco_novo).toFixed(2)}</span>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="${cor} text-xl font-bold mb-1">${perc > 0 ? '+' : ''}${perc.toFixed(1)}%</div>
+                                    <div class="text-xs text-gray-500">${m.data_mudanca?.split('T')[0] || ''}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (err) {
+                console.error('Erro carregar mudanças:', err);
+            }
+        }
+        
+        // Aplicar filtros
+        function aplicarFiltros() {
+            paginaAtual = 1;
+            carregarProdutos();
+        }
+        
+        // Limpar filtros
+        function limparFiltros() {
+            document.getElementById('busca-produtos').value = '';
+            document.getElementById('filtro-fornecedor').value = '';
+            document.getElementById('preco-min').value = '';
+            document.getElementById('preco-max').value = '';
+            paginaAtual = 1;
+            carregarProdutos();
+        }
+        
+        // Varredura rápida
+        async function varreduraRapida() {
+            if (!confirm('Iniciar varredura rápida? Isso vai processar apenas arquivos modificados.')) return;
+            
+            try {
+                const res = await fetch('/api/varredura-rapida', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.sucesso) {
+                    alert('✅ Varredura rápida iniciada! Acompanhe o progresso no status.');
+                    setInterval(atualizarTudo, 3000);
+                } else {
+                    alert('❌ Erro: ' + data.erro);
+                }
+            } catch (err) {
+                alert('❌ Erro ao iniciar varredura');
+            }
+        }
+        
+        // Varredura completa
+        async function varreduraCompleta() {
+            if (!confirm('⚠️ ATENÇÃO! Isso vai REPROCESSAR TUDO!\n\nIsso pode demorar várias horas e usar muitas API keys.\n\nTem certeza?')) return;
+            
+            try {
+                const res = await fetch('/api/varredura-completa', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.sucesso) {
+                    alert('✅ Varredura completa iniciada! Isso vai demorar...');
+                    setInterval(atualizarTudo, 5000);
+                } else {
+                    alert('❌ Erro: ' + data.erro);
+                }
+            } catch (err) {
+                alert('❌ Erro ao iniciar varredura');
+            }
+        }
+        
+        // Iniciar monitoramento
+        async function iniciarMonitoramento() {
+            if (!confirm('Ativar monitoramento 24/7?\n\nO sistema vai detectar automaticamente novos arquivos e mudanças.')) return;
+            
+            try {
+                const res = await fetch('/api/monitoramento/iniciar', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.sucesso) {
+                    alert('✅ Monitoramento ativado!\n\nO sistema está observando a pasta 24/7.');
+                    atualizarTudo();
+                } else {
+                    alert('❌ Erro: ' + data.erro);
+                }
+            } catch (err) {
+                alert('❌ Erro ao iniciar monitoramento');
+            }
+        }
+        
+        // Parar monitoramento
+        async function pararMonitoramento() {
+            if (!confirm('Parar monitoramento?')) return;
+            
+            try {
+                const res = await fetch('/api/monitoramento/parar', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.sucesso) {
+                    alert('✅ Monitoramento parado');
+                    atualizarTudo();
+                } else {
+                    alert('❌ Erro: ' + data.erro);
+                }
+            } catch (err) {
+                alert('❌ Erro ao parar monitoramento');
+            }
+        }
+        
+        // Salvar pasta
+        async function salvarPasta() {
+            const pasta = document.getElementById('config-pasta').value;
+            
+            if (!pasta) {
+                alert('Digite o caminho da pasta!');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/configurar-pasta', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ caminho: pasta })
+                });
+                
+                const data = await res.json();
+                
+                if (data.sucesso) {
+                    alert('✅ Pasta configurada com sucesso!');
+                    document.getElementById('pasta-status').textContent = `Pasta configurada: ${pasta}`;
+                    atualizarTudo();
+                } else {
+                    alert('❌ Erro: ' + data.erro);
+                }
+            } catch (err) {
+                alert('❌ Erro ao configurar pasta');
+            }
+        }
+        
+        // Exportar mudanças
+        function exportarMudancas() {
+            window.location.href = '/api/exportar/mudancas';
+        }
+        
+        // Carregar fornecedores para relatório
+        function carregarFornecedoresRelatorio() {
+            carregarFornecedores();
+        }
+        
+        // Atualizar tudo
+        function atualizarTudo() {
+            atualizarStatus();
+            atualizarKeysStatus();
+            carregarFornecedores();
+            
+            // Se estiver na aba de produtos, recarrega
+            if (!document.getElementById('aba-produtos').classList.contains('hidden')) {
+                carregarProdutos();
+            }
+            
+            // Se estiver na aba de mudanças, recarrega
+            if (!document.getElementById('aba-mudancas').classList.contains('hidden')) {
+                carregarMudancas();
+            }
+        }
+        
+        // Inicialização
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🤖 Sistema iniciado!');
+            atualizarTudo();
+            
+            // Atualiza a cada 5 segundos
+            setInterval(atualizarTudo, 5000);
+        });
+        
+        // Enter nos filtros
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                if (e.target.id === 'busca-produtos' || 
+                    e.target.id === 'preco-min' || 
+                    e.target.id === 'preco-max') {
+                    aplicarFiltros();
+                }
+            }
+        });
+    </script>
+
+</body>
+</html>

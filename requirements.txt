@@ -1,0 +1,35 @@
+# ============================================================
+# SISTEMA QUBO - DEPENDÊNCIAS
+# ============================================================
+
+# APIs
+groq                        # Client Groq API
+requests>=2.31.0            # HTTP client (usado para Mistral API)
+
+# Processamento PDF
+pypdf>=4.0.0                # Leitura de PDFs
+
+# Dados
+pandas>=2.2.0
+openpyxl>=3.1.0             # Excel
+numpy>=1.26.0
+
+# Web
+flask>=3.0.0                # Dashboard HTTP
+flask-cors>=4.0.0
+
+# Utilidades
+python-dotenv>=1.0.0        # Variáveis ambiente
+beautifulsoup4>=4.12.0      # Web scraping (futuro ML)
+lxml>=4.9.0
+
+# Monitoramento
+watchdog>=4.0.0             # File watcher
+
+# Google Drive (opcional)
+google-generativeai>=0.8.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.110.0
+odfpy>=1.4.1
