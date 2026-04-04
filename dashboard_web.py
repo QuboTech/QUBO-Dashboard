@@ -2302,16 +2302,25 @@ def abrir_nav():
     webbrowser.open('http://localhost:5000')
 
 if __name__ == "__main__":
+    import os as _os
+    # Render usa PORT dinamico; local usa 5000
+    port = int(_os.getenv("PORT", 5000))
+    host = "0.0.0.0"  # Obrigatorio para Render
+    
+    is_local = port == 5000 and not _os.getenv("RENDER")
+    
     print("\n" + "="*70)
-    print("  📊 DASHBOARD QUBO v3 — TUDO EM UM")
+    print("  QUBO Dashboard v3")
     print("="*70)
-    print("\n  🌐 http://localhost:5000")
-    print("  ⌨️  CTRL+C para parar")
-    print("\n  📄 /processar     → Processar PDFs")
-    print("  📊 /              → Viabilidade")
-    print("  ⭐ /escolhidos    → Formação de Preço")
-    print("  🔗 /ml-auth       → Conectar Mercado Livre")
-    print("  📥 /exportar      → Excel")
-    print("\n" + "="*70)
-    threading.Thread(target=abrir_nav, daemon=True).start()
-    app.run(host='localhost', port=5000, debug=False)
+    print(f"\n  Rodando em: http://{host}:{port}")
+    print("  Ambiente:", "LOCAL" if is_local else "RENDER (producao)")
+    print("\n  /processar  -> Processar PDFs")
+    print("  /           -> Viabilidade")
+    print("  /escolhidos -> Formacao de Preco")
+    print("  /ml-auth    -> Conectar Mercado Livre")
+    print("="*70)
+    
+    if is_local:
+        threading.Thread(target=abrir_nav, daemon=True).start()
+    
+    app.run(host=host, port=port, debug=False)
