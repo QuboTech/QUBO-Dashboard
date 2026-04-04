@@ -16,7 +16,6 @@ Substitui: dashboard_web.py v2
 Autor: Claude para QUBO
 Data: 2026-02
 """
-import sqlite3
 import json
 import io
 import time
@@ -26,6 +25,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, send_file
+from db import get_conn, existe_banco, garantir_schema, dict_row, placeholder, DB_PATH, USAR_POSTGRES
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -44,7 +44,6 @@ def formato_br(value, decimais=2):
     except:
         return str(value)
 
-DB_PATH = Path("data/viabilidade.db")
 
 # ============================================================
 # TABELA DE FRETE OFICIAL ML (extraída da planilha)
@@ -291,7 +290,7 @@ def garantir_schema():
     """Adiciona colunas novas se não existirem"""
     if not DB_PATH.exists():
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(produtos)")
     existentes = {row[1] for row in cursor.fetchall()}
@@ -533,7 +532,10 @@ HTML_TEMPLATE = """
             <td id="luc-{{ p.id }}" class="{% if p.margem_reais and p.margem_reais > 0 %}margem-pos{% elif p.preco_ml and p.preco_ml > 0 %}margem-neg{% else %}margem-zero{% endif %}">{{ p.margem_reais|br if p.preco_ml and p.preco_ml > 0 else '-' }}</td>
             <td id="mg-{{ p.id }}" class="{% if p.margem_percentual and p.margem_percentual >= 20 %}margem-pos{% elif p.margem_percentual and p.margem_percentual > 0 %}margem-warn{% elif p.preco_ml and p.preco_ml > 0 %}margem-neg{% else %}margem-zero{% endif %}">{{ p.margem_percentual|br(1) if p.preco_ml and p.preco_ml > 0 else '-' }}{% if p.preco_ml and p.preco_ml > 0 %}%{% endif %}</td>
             <td id="st-{{ p.id }}">{% if p.preco_ml and p.preco_ml > 0 %}{% if p.viavel %}<span class="viavel-sim">VIÁVEL</span>{% else %}<span class="viavel-nao">NÃO</span>{% endif %}{% else %}<span class="viavel-pendente">—</span>{% endif %}</td>
-            <td><button class="btn btn-primary btn-sm" data-id="{{ p.id }}" data-desc="{{ p.descricao|e }}" onclick="buscarML(this.dataset.id, this.dataset.desc)" title="Buscar no ML">🔍</button></td>
+            <td style="display:flex;gap:3px">
+                <button class="btn btn-primary btn-sm" data-id="{{ p.id }}" data-desc="{{ p.descricao|e }}" onclick="buscarML(this.dataset.id, this.dataset.desc)" title="Buscar preço médio no ML">🔍</button>
+                <button class="btn btn-sm" style="background:#7c3aed;color:#fff" data-id="{{ p.id }}" onclick="pesquisarProduto({{ p.id }})" title="Agente: análise completa de mercado">🤖</button>
+            </td>
             <td style="color:#fbbf24">{{ p.pagina_origem or '-' }}</td>
             <td><button class="btn btn-sm" style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;font-size:.65rem" onclick="deletarProduto({{ p.id }})" title="Deletar">🗑️</button></td>
         </tr>
@@ -686,7 +688,145 @@ function atualizarTaxasML(){
     }).catch(()=>{btn.disabled=false;btn.textContent='📊 Atualizar Taxas ML';showToast('❌ Erro',true);});
 }
 
-function showToast(m,e){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(e?' error':'');setTimeout(()=>{t.className='toast'},2500)}
+function pesquisarProduto(id){
+    showToast('🤖 Analisando mercado...');
+    fetch('/api/pesquisar-produto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalPesquisa(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalPesquisa(d){
+    const cor = (m) => m===null ? '#8b92a5' : m>=20 ? '#4ade80' : m>=10 ? '#fbbf24' : '#f87171';
+    const fmt = (v,dec=2) => v!=null ? v.toFixed(dec).replace('.',',') : '-';
+    
+    const topAnuncios = (d.top_anuncios||[]).map((a,i)=>`
+        <tr style="border-bottom:1px solid #1a1f3a">
+            <td style="padding:4px 8px;color:#8b92a5">${i+1}</td>
+            <td style="padding:4px 8px;color:#e4e6eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${a.titulo}">${a.titulo}</td>
+            <td style="padding:4px 8px;color:#4ade80;font-weight:700">R$ ${fmt(a.preco)}</td>
+            <td style="padding:4px 8px;color:#fbbf24">${a.vendas.toLocaleString('pt-BR')}</td>
+            <td style="padding:4px 8px;color:#f093fb;font-size:.75rem">${a.vendedor}</td>
+            <td style="padding:4px 8px"><a href="${a.link}" target="_blank" style="color:#667eea;font-size:.75rem">Ver ↗</a></td>
+        </tr>`).join('');
+    
+    const margemBox = d.custo > 0 ? `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Margem no mínimo</div>
+                <div style="font-size:1.1rem;font-weight:700;color:${cor(d.margem_no_minimo)}">${fmt(d.margem_no_minimo,1)}%</div>
+                <div style="font-size:.7rem;color:#8b92a5">R$ ${fmt(d.preco_min)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Margem no mediano</div>
+                <div style="font-size:1.1rem;font-weight:700;color:${cor(d.margem_no_mediano)}">${fmt(d.margem_no_mediano,1)}%</div>
+                <div style="font-size:.7rem;color:#8b92a5">R$ ${fmt(d.preco_mediano)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Preço p/ 25% marg.</div>
+                <div style="font-size:1.1rem;font-weight:700;color:#667eea">R$ ${fmt(d.preco_sugerido_25pct)}</div>
+                <div style="font-size:.7rem;color:#8b92a5">Custo: R$ ${fmt(d.custo)}</div>
+            </div>
+        </div>` : `<div style="color:#8b92a5;font-size:.8rem;margin-top:8px">⚠️ Cadastre o custo do produto para ver análise de margem.</div>`;
+    
+    const h = `<div id="modalPesquisa" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #7c3aed;width:800px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+            <div>
+                <h3 style="color:#7c3aed;margin-bottom:4px">🤖 Análise de Mercado ML</h3>
+                <div style="color:#e4e6eb;font-size:.85rem">${d.produto_nome}</div>
+                <div style="color:#8b92a5;font-size:.75rem">Termo buscado: "${d.termo_buscado}" · ${d.total_anuncios_ml.toLocaleString('pt-BR')} anúncios no ML</div>
+            </div>
+            <button onclick="document.getElementById('modalPesquisa').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:6px 12px;cursor:pointer;font-size:.85rem">✕ Fechar</button>
+        </div>
+        
+        <!-- Resumo de preços -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Mínimo</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#f87171">R$ ${fmt(d.preco_min)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Mediano</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#4ade80">R$ ${fmt(d.preco_mediano)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Médio</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#fbbf24">R$ ${fmt(d.preco_medio)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Máximo</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#c084fc">R$ ${fmt(d.preco_max)}</div>
+            </div>
+        </div>
+        
+        <!-- Vendas e taxa -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Total vendas (top 20)</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#4ade80">${(d.vendas_totais_top20||0).toLocaleString('pt-BR')}</div>
+                <div style="font-size:.7rem;color:#8b92a5">unidades acumuladas</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Média p/ anúncio</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#fbbf24">${(d.media_vendas_por_anuncio||0).toLocaleString('pt-BR')}</div>
+                <div style="font-size:.7rem;color:#8b92a5">unidades acumuladas</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase;margin-bottom:4px">Taxa ML (categoria)</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#f093fb">${fmt(d.taxa_percentual,1)}%</div>
+                <div style="font-size:.7rem;color:#8b92a5">${d.categoria_id||'—'}</div>
+            </div>
+        </div>
+        
+        <!-- Análise de margem -->
+        ${margemBox}
+        
+        <!-- Top anúncios -->
+        <div style="margin-top:14px">
+            <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:6px">Top Anúncios por Vendas</div>
+            <div style="overflow-x:auto;border-radius:5px">
+            <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.78rem">
+                <thead><tr style="border-bottom:1px solid #2d3452">
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">#</th>
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">Título</th>
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">Preço</th>
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">Vendas</th>
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">Vendedor</th>
+                    <th style="padding:5px 8px;text-align:left;color:#8b92a5">Link</th>
+                </tr></thead>
+                <tbody>${topAnuncios}</tbody>
+            </table>
+            </div>
+        </div>
+        
+        <!-- Ação rápida -->
+        <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+            <button onclick="usarPrecoMediano(${d.produto_id}, ${d.preco_mediano}, ${d.taxa_percentual})" 
+                style="padding:8px 16px;border:none;border-radius:5px;background:#4ade80;color:#000;font-weight:700;cursor:pointer">
+                💰 Usar preço mediano (R$ ${fmt(d.preco_mediano)})
+            </button>
+        </div>
+    </div></div>`;
+    
+    document.getElementById('modalPesquisa')?.remove();
+    document.body.insertAdjacentHTML('beforeend', h);
+}
+
+function usarPrecoMediano(id, preco, taxa){
+    document.getElementById('modalPesquisa')?.remove();
+    const pmlEl = document.getElementById('pml-'+id);
+    const txEl = document.getElementById('tx-'+id);
+    if(pmlEl){
+        pmlEl.value = preco.toFixed(2);
+        if(txEl) txEl.value = taxa.toFixed(1);
+        salvar(pmlEl);
+        showToast('✅ Preço mediano aplicado!');
+    }
+}
+
+
 
 function mostrarModalProduto(){
     const h=`<div id="modalProd" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);display:flex;justify-content:center;align-items:center;z-index:9999">
@@ -741,8 +881,7 @@ def index():
     if not DB_PATH.exists():
         return render_template_string(HTML_TEMPLATE,produtos=[],stats={'total':0,'fornecedores':0,'com_preco_ml':0,'sem_preco_ml':0,'viaveis':0,'nao_viaveis':0,'pendentes':0,'total_filtrado':0},fornecedores=[],f={},pg=1,total_paginas=1,url_pg=lambda p:'/',aliquota_imposto_pct=0)
     
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_conn()
     cur = conn.cursor()
     
     f = {k: request.args.get(k,'') for k in ['custo_min','custo_max','fornecedor','produto','codigo','viabilidade']}
@@ -801,7 +940,7 @@ def api_atualizar():
         custo_ads = float(d.get('custo_ads', 0))
         aliq = float(d.get('aliquota_imposto', get_aliquota()))
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT custo, descricao FROM produtos WHERE id = ?", (pid,))
         row = cur.fetchone()
@@ -830,7 +969,7 @@ def api_adicionar_produto():
         if not desc:
             return jsonify({'ok': False, 'erro': 'Descrição obrigatória'})
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         garantir_schema()
         
@@ -858,7 +997,7 @@ def api_deletar_produto():
         if not pid:
             return jsonify({'ok': False, 'erro': 'ID obrigatório'})
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("DELETE FROM produtos WHERE id = ?", (pid,))
         conn.commit()
@@ -883,7 +1022,7 @@ def api_buscar_ml():
         
         resultado = ml.buscar_preco_medio(termo, limite=10)
         if resultado.get('encontrado'):
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_conn()
             cur = conn.cursor()
             
             preco_medio = resultado['preco_medio']
@@ -933,7 +1072,7 @@ def api_recalcular_todos():
         d = request.get_json() or {}
         aliq = float(d.get('aliquota', get_aliquota()))
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT id, custo, preco_ml, taxa_categoria, peso_kg, custo_embalagem, custo_ads FROM produtos WHERE preco_ml > 0")
         rows = cur.fetchall()
@@ -966,7 +1105,7 @@ def api_aliquota():
 def exportar():
     try:
         import pandas as pd
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         df = pd.read_sql_query("SELECT * FROM produtos ORDER BY fornecedor, codigo", conn)
         conn.close()
         
@@ -995,7 +1134,7 @@ def api_escolher():
     try:
         d = request.get_json()
         ids = d.get('ids', [])
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         for pid in ids:
             cur.execute("UPDATE produtos SET escolhido = 1 WHERE id = ?", (pid,))
@@ -1013,7 +1152,7 @@ def api_descartar():
     try:
         d = request.get_json()
         ids = d.get('ids', [])
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         for pid in ids:
             cur.execute("UPDATE produtos SET escolhido = 0, custo_full = 0, custo_ads = 0, promo_percentual = 0, preco_ideal = 0, preco_final = 0, lucro_final = 0, margem_final = 0 WHERE id = ?", (pid,))
@@ -1031,7 +1170,7 @@ def api_formacao():
         pid = d['id']
         modo = d.get('modo', 'preco')  # 'preco' ou 'margem'
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT custo, descricao, taxa_categoria, peso_kg, custo_embalagem FROM produtos WHERE id = ?", (pid,))
         row = cur.fetchone()
@@ -1335,8 +1474,7 @@ def escolhidos():
     if not DB_PATH.exists():
         return render_template_string(ESCOLHIDOS_HTML, produtos=[], viaveis=0, nao_viaveis=0, lucro_total=0, margem_media=0)
     
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM produtos WHERE escolhido = 1 ORDER BY fornecedor, codigo")
     produtos = [dict(r) for r in cur.fetchall()]
@@ -1356,7 +1494,7 @@ def escolhidos():
 def exportar_escolhidos():
     try:
         import pandas as pd
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         df = pd.read_sql_query("SELECT * FROM produtos WHERE escolhido = 1 ORDER BY fornecedor, codigo", conn)
         conn.close()
         rename = {'codigo':'Código','fornecedor':'Fornecedor','descricao':'Produto',
@@ -1628,7 +1766,7 @@ def pagina_processar():
         pdf_stats['pendentes'] = pdf_stats['total'] - pdf_stats['processados']
     
     if DB_PATH.exists():
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM produtos")
         pdf_stats['produtos_banco'] = cur.fetchone()[0]
@@ -1726,7 +1864,7 @@ def _processar_background():
                 
                 if produtos:
                     # Salva no banco
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = get_conn()
                     cur = conn.cursor()
                     
                     # Garante tabela existe
@@ -2041,8 +2179,7 @@ def api_atualizar_taxas_ml():
         if not ml.esta_autenticado():
             return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro! Clique em 🔗 ML Auth'})
         
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT id, descricao, preco_ml, taxa_categoria FROM produtos")
         produtos = [dict(r) for r in cur.fetchall()]
@@ -2128,6 +2265,34 @@ def api_atualizar_taxas_ml():
         return jsonify({'ok': True, 'total': total, 'atualizados': atualizados, 'erros': erros})
     except ImportError:
         return jsonify({'ok': False, 'erro': 'ml_buscador.py não encontrado'})
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/pesquisar-produto', methods=['POST'])
+def api_pesquisar_produto():
+    """Agente de Pesquisa de Produto — analisa mercado no ML"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_pesquisa import analisar_produto_ml
+        
+        d = request.get_json()
+        produto_id = d.get('id')
+        
+        if not produto_id:
+            return jsonify({'ok': False, 'erro': 'ID do produto obrigatório'})
+        
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro! Clique em 🔗 ML Auth'})
+        
+        token = ml.auth.access_token
+        resultado = analisar_produto_ml(produto_id, token)
+        
+        return jsonify(resultado)
+        
+    except ImportError as e:
+        return jsonify({'ok': False, 'erro': f'Módulo não encontrado: {e}'})
     except Exception as e:
         return jsonify({'ok': False, 'erro': str(e)})
 
