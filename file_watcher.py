@@ -1,272 +1,261 @@
 """
-file_watcher.py - Monitor automático de pasta com detecção de mudanças
+file_watcher.py - Monitor de Pasta com Auto-Processamento de PDFs
+=================================================================
+Monitora uma pasta local. Quando detecta PDF novo:
+1. Extrai produtos com IA (multi_extractor)
+2. Salva no banco (local SQLite ou Supabase via DATABASE_URL)
+3. Renomeia o PDF para .enviado (nunca reprocessa)
+
+Uso:
+    python file_watcher.py                  # roda uma vez e sai
+    python file_watcher.py --watch          # fica monitorando continuamente
+
+Autor: Claude para QUBO
+Data: 2026-04
 """
+
+import os
+import sys
 import time
 import logging
+import sqlite3
+import json
+import argparse
 from pathlib import Path
-from typing import List, Callable, Dict
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
-from config import Config
-from data_manager import DataManager
-from pdf_processor import PDFProcessor
-from comparador import ComparadorInteligente
-from models import RelatorioProcessamento
+from datetime import datetime
+from dotenv import load_dotenv
 
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
-class PDFHandler(FileSystemEventHandler):
-    """Handler para eventos de arquivos PDF"""
-    
-    def __init__(self, callback: Callable):
-        super().__init__()
-        self.callback = callback
-        self.arquivos_pendentes = set()
-        self.ultimo_evento = {}
-    
-    def on_created(self, event: FileSystemEvent):
-        """Quando arquivo é criado"""
-        if not event.is_directory and event.src_path.endswith('.pdf'):
-            logger.info(f"🆕 Novo arquivo detectado: {Path(event.src_path).name}")
-            self._agendar_processamento(event.src_path)
-    
-    def on_modified(self, event: FileSystemEvent):
-        """Quando arquivo é modificado"""
-        if not event.is_directory and event.src_path.endswith('.pdf'):
-            # Evita processar o mesmo arquivo múltiplas vezes em curto período
-            agora = time.time()
-            ultimo = self.ultimo_evento.get(event.src_path, 0)
-            
-            if agora - ultimo > 5:  # 5 segundos de cooldown
-                logger.info(f"📝 Arquivo modificado: {Path(event.src_path).name}")
-                self._agendar_processamento(event.src_path)
-                self.ultimo_evento[event.src_path] = agora
-    
-    def _agendar_processamento(self, caminho: str):
-        """Agenda arquivo para processamento"""
-        self.arquivos_pendentes.add(caminho)
-        # Aguarda um pouco para garantir que arquivo foi completamente salvo
-        time.sleep(2)
-        self.callback(caminho)
-        self.arquivos_pendentes.discard(caminho)
+PASTA = os.getenv('PASTA_MONITORADA', '')
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+DB_PATH = Path('data/viabilidade.db')
+EXTENSAO_ENVIADO = '.enviado'
 
 
-class FileWatcher:
-    """Monitor de pasta com processamento automático"""
-    
-    def __init__(self, pasta_monitorada: str = None):
-        self.pasta_monitorada = pasta_monitorada or Config.PASTA_MONITORADA
-        self.data_manager = DataManager()
-        self.pdf_processor = PDFProcessor()
-        self.observer = None
-        self.ativo = False
-        
-        if not self.pasta_monitorada:
-            raise ValueError("Pasta para monitorar não foi configurada")
-        
-        pasta_path = Path(self.pasta_monitorada)
-        if not pasta_path.exists():
-            raise FileNotFoundError(f"Pasta não encontrada: {self.pasta_monitorada}")
-    
-    def processar_arquivo_automatico(self, caminho: str):
-        """
-        Processa arquivo automaticamente quando detectada mudança
-        
-        Args:
-            caminho: Caminho do arquivo a processar
-        """
-        logger.info("\n" + "🔄 " + "=" * 68)
-        logger.info("PROCESSAMENTO AUTOMÁTICO INICIADO")
-        logger.info("=" * 70)
-        
-        try:
-            caminho_path = Path(caminho)
-            
-            # Verifica se precisa processar
-            if self.data_manager.arquivo_ja_processado(caminho):
-                if not self.data_manager.arquivo_foi_modificado(caminho):
-                    logger.info(f"⏭️  Arquivo não foi modificado, pulando...")
-                    return
-                else:
-                    logger.info(f"🔄 Arquivo foi modificado, reprocessando...")
-            
-            # Processa arquivo
-            produtos, arquivo_processado = self.pdf_processor.processar_arquivo(
-                caminho,
-                fornecedor=caminho_path.parent.name
+def get_conn():
+    """Conexão com banco correto (Postgres ou SQLite)"""
+    if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        DB_PATH.parent.mkdir(exist_ok=True)
+        return sqlite3.connect(DB_PATH)
+
+
+def garantir_tabela():
+    conn = get_conn()
+    cur = conn.cursor()
+    if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS produtos (
+                id SERIAL PRIMARY KEY,
+                codigo TEXT DEFAULT '',
+                fornecedor TEXT DEFAULT '',
+                descricao TEXT DEFAULT '',
+                custo REAL DEFAULT 0,
+                preco_ml REAL DEFAULT 0,
+                taxa_categoria REAL DEFAULT 0.165,
+                peso_kg REAL DEFAULT 0,
+                custo_embalagem REAL DEFAULT 0,
+                custo_frete REAL DEFAULT 0,
+                taxa_fixa_ml REAL DEFAULT 0,
+                imposto_valor REAL DEFAULT 0,
+                custo_total REAL DEFAULT 0,
+                margem_percentual REAL DEFAULT 0,
+                margem_reais REAL DEFAULT 0,
+                viavel INTEGER DEFAULT 0,
+                link_ml TEXT DEFAULT '',
+                tipo_anuncio TEXT DEFAULT 'classico',
+                escolhido INTEGER DEFAULT 0,
+                custo_full REAL DEFAULT 0,
+                custo_ads REAL DEFAULT 0,
+                promo_percentual REAL DEFAULT 0,
+                margem_alvo REAL DEFAULT 25,
+                preco_ideal REAL DEFAULT 0,
+                preco_final REAL DEFAULT 0,
+                lucro_final REAL DEFAULT 0,
+                margem_final REAL DEFAULT 0,
+                pagina_origem INTEGER DEFAULT 0,
+                data_analise TEXT DEFAULT '',
+                arquivo_origem TEXT DEFAULT ''
             )
-            
-            if not produtos:
-                logger.warning("⚠️  Nenhum produto extraído")
-                return
-            
-            # Compara com base existente
-            comparador = ComparadorInteligente(self.data_manager.df_produtos)
-            novos, atualizados, mudancas = comparador.comparar_produtos(produtos)
-            
-            # Atualiza base de dados
-            if novos:
-                self.data_manager.adicionar_produtos(novos)
-            
-            if atualizados:
-                self.data_manager.atualizar_produtos(atualizados)
-            
-            if mudancas:
-                self.data_manager.registrar_mudancas_preco(mudancas)
-                self._exibir_mudancas_preco(mudancas)
-            
-            # Salva tudo
-            self.data_manager.remover_duplicatas()
-            self.data_manager.salvar_excel()
-            
-            # Registra arquivo como processado
-            if arquivo_processado:
-                self.data_manager.registrar_arquivo_processado(arquivo_processado)
-            
-            logger.info("\n✅ Processamento automático concluído com sucesso!\n")
-            
-        except Exception as e:
-            logger.error(f"❌ Erro no processamento automático: {e}", exc_info=True)
-    
-    def _exibir_mudancas_preco(self, mudancas: List):
-        """Exibe mudanças de preço de forma destacada"""
-        if not mudancas:
-            return
-        
-        logger.info("\n" + "💰 " + "=" * 68)
-        logger.info("MUDANÇAS DE PREÇO DETECTADAS")
-        logger.info("=" * 70)
-        
-        for m in mudancas[:10]:  # Mostra até 10 mudanças
-            simbolo = "📈" if m.percentual_mudanca > 0 else "📉"
-            logger.info(
-                f"{simbolo} {m.codigo} - {m.descricao[:40]}\n"
-                f"   R$ {m.preco_antigo:.2f} → R$ {m.preco_novo:.2f} "
-                f"({m.percentual_mudanca:+.1f}%)"
+        """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS produtos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                codigo TEXT, fornecedor TEXT, descricao TEXT, custo REAL,
+                data_analise TEXT, arquivo_origem TEXT, pagina_origem INTEGER DEFAULT 0
             )
-        
-        if len(mudancas) > 10:
-            logger.info(f"\n   ... e mais {len(mudancas) - 10} mudanças")
-        
-        logger.info("=" * 70 + "\n")
+        """)
+    conn.commit()
+    conn.close()
+
+
+def salvar_produtos(produtos, fornecedor, nome_arquivo):
+    """Salva lista de produtos no banco"""
+    conn = get_conn()
+    cur = conn.cursor()
+    salvos = 0
     
-    def varredura_inicial(self) -> RelatorioProcessamento:
-        """
-        Faz varredura inicial da pasta
-        
-        Returns:
-            Relatório do processamento
-        """
-        logger.info("\n" + "🔍 " + "=" * 68)
-        logger.info("VARREDURA INICIAL DA PASTA")
-        logger.info("=" * 70)
-        
-        relatorio = RelatorioProcessamento(
-            data_inicio=time.strftime("%Y-%m-%d %H:%M:%S")
-        )
-        
+    is_pg = DATABASE_URL and DATABASE_URL.startswith('postgresql')
+    ph = '%s' if is_pg else '?'
+
+    for p in produtos:
         try:
-            # Lista todos os PDFs
-            pdfs = self.pdf_processor.listar_pdfs_em_pasta(self.pasta_monitorada)
-            
-            if not pdfs:
-                logger.warning("⚠️  Nenhum arquivo PDF encontrado na pasta")
-                relatorio.finalizar()
-                return relatorio
-            
-            logger.info(f"\n📋 Encontrados {len(pdfs)} arquivos PDF")
-            logger.info("Verificando quais precisam ser processados...\n")
-            
-            # Identifica arquivos novos ou modificados
-            arquivos_processar = []
-            
-            for pdf_path in pdfs:
-                if not self.data_manager.arquivo_ja_processado(str(pdf_path)):
-                    arquivos_processar.append((pdf_path, "NOVO"))
-                    relatorio.arquivos_novos += 1
-                elif self.data_manager.arquivo_foi_modificado(str(pdf_path)):
-                    arquivos_processar.append((pdf_path, "MODIFICADO"))
-                    relatorio.arquivos_atualizados += 1
-            
-            if not arquivos_processar:
-                logger.info("✅ Todos os arquivos já estão processados e atualizados!")
-                relatorio.finalizar()
-                return relatorio
-            
-            logger.info(f"🔄 {len(arquivos_processar)} arquivos precisam ser processados\n")
-            
-            # Processa cada arquivo
-            for i, (pdf_path, status) in enumerate(arquivos_processar, 1):
-                logger.info(f"\n[{i}/{len(arquivos_processar)}] {status}: {pdf_path.name}")
-                
-                try:
-                    self.processar_arquivo_automatico(str(pdf_path))
-                    relatorio.arquivos_processados += 1
-                    
-                except Exception as e:
-                    erro = f"{pdf_path.name}: {str(e)}"
-                    relatorio.adicionar_erro(erro)
-                    logger.error(f"❌ Erro: {e}")
-                
-                # Pequena pausa entre arquivos
-                time.sleep(2)
-            
-            relatorio.finalizar()
-            self._exibir_relatorio_final(relatorio)
-            
-            return relatorio
-            
+            cur.execute(
+                f"""INSERT INTO produtos (codigo, fornecedor, descricao, custo, data_analise, arquivo_origem)
+                   VALUES ({ph},{ph},{ph},{ph},{ph},{ph})""",
+                (p.codigo, fornecedor, p.descricao, p.preco_unitario,
+                 datetime.now().isoformat(), nome_arquivo)
+            )
+            salvos += 1
         except Exception as e:
-            logger.error(f"❌ Erro na varredura: {e}", exc_info=True)
-            relatorio.adicionar_erro(f"Erro geral: {str(e)}")
-            relatorio.finalizar()
-            return relatorio
+            logger.warning(f"   ⚠️ Erro ao salvar produto: {e}")
+
+    conn.commit()
+    conn.close()
+    return salvos
+
+
+def processar_pdf(caminho_pdf: Path) -> bool:
+    """
+    Processa um PDF:
+    1. Extrai produtos
+    2. Salva no banco
+    3. Renomeia para .enviado
+    Retorna True se sucesso.
+    """
+    try:
+        from multi_extractor import MultiExtractor
+        extractor = MultiExtractor()
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar extrator: {e}")
+        return False
+
+    # Fornecedor = nome do arquivo sem extensão
+    fornecedor = caminho_pdf.stem
+    nome_arquivo = caminho_pdf.name
+
+    logger.info(f"📄 Processando: {nome_arquivo}")
+
+    try:
+        produtos, info = extractor.extrair_de_pdf(str(caminho_pdf), fornecedor)
+    except Exception as e:
+        logger.error(f"   ❌ Erro na extração: {e}")
+        return False
+
+    if not produtos:
+        logger.warning(f"   ⚠️ Nenhum produto encontrado em {nome_arquivo}")
+        # Mesmo sem produtos, renomeia para não tentar de novo
+        _renomear_enviado(caminho_pdf)
+        return True
+
+    salvos = salvar_produtos(produtos, fornecedor, nome_arquivo)
+    logger.info(f"   ✅ {salvos} produtos salvos no banco")
+
+    # Renomeia para .enviado
+    _renomear_enviado(caminho_pdf)
+    return True
+
+
+def _renomear_enviado(caminho: Path):
+    """Renomeia arquivo para .enviado para não reprocessar"""
+    novo_nome = caminho.with_suffix(EXTENSAO_ENVIADO)
+    try:
+        caminho.rename(novo_nome)
+        logger.info(f"   📁 Renomeado → {novo_nome.name}")
+    except Exception as e:
+        logger.warning(f"   ⚠️ Não foi possível renomear: {e}")
+
+
+def listar_pdfs_pendentes(pasta: Path):
+    """Lista PDFs que ainda não foram processados (.enviado)"""
+    if not pasta.exists():
+        logger.error(f"❌ Pasta não encontrada: {pasta}")
+        return []
     
-    def _exibir_relatorio_final(self, relatorio: RelatorioProcessamento):
-        """Exibe relatório final do processamento"""
-        logger.info("\n" + "📊 " + "=" * 68)
-        logger.info("RELATÓRIO FINAL")
-        logger.info("=" * 70)
-        logger.info(f"Início: {relatorio.data_inicio}")
-        logger.info(f"Fim: {relatorio.data_fim}")
-        logger.info(f"\n📁 Arquivos:")
-        logger.info(f"   • Processados: {relatorio.arquivos_processados}")
-        logger.info(f"   • Novos: {relatorio.arquivos_novos}")
-        logger.info(f"   • Atualizados: {relatorio.arquivos_atualizados}")
-        
-        if relatorio.erros:
-            logger.info(f"\n❌ Erros: {len(relatorio.erros)}")
-            for erro in relatorio.erros[:5]:
-                logger.info(f"   • {erro}")
-        
-        logger.info("=" * 70 + "\n")
+    # Busca PDFs em subpastas também
+    pdfs = list(pasta.rglob('*.pdf')) + list(pasta.rglob('*.PDF'))
     
-    def iniciar_monitoramento(self):
-        """Inicia monitoramento contínuo da pasta"""
-        logger.info("\n" + "👀 " + "=" * 68)
-        logger.info("MONITOR DE PASTA ATIVADO")
-        logger.info("=" * 70)
-        logger.info(f"📁 Monitorando: {self.pasta_monitorada}")
-        logger.info(f"⏱️  Verificação: A cada alteração de arquivo")
-        logger.info("=" * 70 + "\n")
-        
-        event_handler = PDFHandler(self.processar_arquivo_automatico)
-        self.observer = Observer()
-        self.observer.schedule(event_handler, self.pasta_monitorada, recursive=True)
-        self.observer.start()
-        self.ativo = True
-        
+    # Filtra os que já foram enviados (verificação extra por segurança)
+    pendentes = [p for p in pdfs if not p.with_suffix(EXTENSAO_ENVIADO).exists()]
+    
+    return pendentes
+
+
+def rodar_uma_vez(pasta: Path):
+    """Processa todos os PDFs pendentes e sai"""
+    garantir_tabela()
+    pdfs = listar_pdfs_pendentes(pasta)
+    
+    if not pdfs:
+        logger.info("✅ Nenhum PDF pendente encontrado.")
+        return
+    
+    logger.info(f"📂 {len(pdfs)} PDF(s) pendente(s) em {pasta}")
+    
+    ok = 0
+    erros = 0
+    for pdf in pdfs:
+        if processar_pdf(pdf):
+            ok += 1
+        else:
+            erros += 1
+    
+    logger.info(f"\n🎉 Concluído: {ok} processados, {erros} erros")
+
+
+def rodar_monitorando(pasta: Path, intervalo: int = 30):
+    """Fica monitorando a pasta continuamente"""
+    garantir_tabela()
+    logger.info(f"👁️  Monitorando: {pasta}")
+    logger.info(f"⏱️  Verificando a cada {intervalo}s — CTRL+C para parar\n")
+    
+    while True:
         try:
-            while self.ativo:
-                time.sleep(1)
+            pdfs = listar_pdfs_pendentes(pasta)
+            if pdfs:
+                logger.info(f"🆕 {len(pdfs)} PDF(s) novo(s) detectado(s)!")
+                for pdf in pdfs:
+                    processar_pdf(pdf)
+            time.sleep(intervalo)
         except KeyboardInterrupt:
-            logger.info("\n⏹️  Encerrando monitor...")
-            self.parar_monitoramento()
-    
-    def parar_monitoramento(self):
-        """Para o monitoramento"""
-        if self.observer:
-            self.observer.stop()
-            self.observer.join()
-            self.ativo = False
-            logger.info("✅ Monitor encerrado")
+            logger.info("\n⏹️  Monitoramento encerrado.")
+            break
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Monitor de PDFs QUBO')
+    parser.add_argument('--watch', action='store_true',
+                        help='Monitorar continuamente (default: processa uma vez e sai)')
+    parser.add_argument('--pasta', type=str, default=PASTA,
+                        help='Pasta a monitorar (default: PASTA_MONITORADA do .env)')
+    parser.add_argument('--intervalo', type=int, default=30,
+                        help='Segundos entre verificações no modo watch (default: 30)')
+    args = parser.parse_args()
+
+    if not args.pasta:
+        logger.error("❌ Configure PASTA_MONITORADA no .env ou use --pasta")
+        sys.exit(1)
+
+    pasta = Path(args.pasta)
+    banco = 'Postgres (Supabase)' if DATABASE_URL else 'SQLite local'
+    logger.info(f"🗄️  Banco: {banco}")
+
+    if args.watch:
+        rodar_monitorando(pasta, args.intervalo)
+    else:
+        rodar_uma_vez(pasta)
+
+
+if __name__ == '__main__':
+    main()
