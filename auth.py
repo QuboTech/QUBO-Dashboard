@@ -72,6 +72,8 @@ def get_usuario_nome():
 
 
 def verificar_login(usuario, senha):
+    # Recarrega sempre para pegar vars de ambiente atuais
+    carregar_usuarios()
     if usuario in USUARIOS:
         if USUARIOS[usuario]["senha_hash"] == _hash(senha):
             return True
