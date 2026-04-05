@@ -1,6 +1,6 @@
 """
-db.py - Camada de banco de dados com suporte SQLite (local) e Postgres (Render/Supabase)
-Detecta automaticamente o ambiente via variável DATABASE_URL.
+db.py - Banco de dados multi-tenant
+Cada tenant_id isola completamente os dados do usuário.
 """
 import os
 import sqlite3
@@ -8,35 +8,25 @@ from pathlib import Path
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 USAR_POSTGRES = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql"))
-
 DB_PATH = Path("data/viabilidade.db")
 
 
 def get_conn():
-    """
-    Retorna conexão com o banco correto.
-    - LOCAL: SQLite (data/viabilidade.db)
-    - RENDER: Postgres (Supabase via DATABASE_URL)
-    """
     if USAR_POSTGRES:
         import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
-    else:
-        DB_PATH.parent.mkdir(exist_ok=True)
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return psycopg2.connect(DATABASE_URL)
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def existe_banco():
-    """Verifica se o banco existe e tem a tabela produtos"""
     try:
         conn = get_conn()
         cur = conn.cursor()
         if USAR_POSTGRES:
-            cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'produtos')")
+            cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='produtos')")
             existe = cur.fetchone()[0]
         else:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='produtos'")
@@ -48,15 +38,15 @@ def existe_banco():
 
 
 def garantir_schema():
-    """Cria/atualiza o schema do banco"""
     conn = get_conn()
     cur = conn.cursor()
+    ph = "%s" if USAR_POSTGRES else "?"
 
     if USAR_POSTGRES:
-        # Postgres — cria tabela se não existir
         cur.execute("""
             CREATE TABLE IF NOT EXISTS produtos (
                 id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
                 codigo TEXT DEFAULT '',
                 fornecedor TEXT DEFAULT '',
                 descricao TEXT DEFAULT '',
@@ -89,19 +79,21 @@ def garantir_schema():
                 arquivo_origem TEXT DEFAULT ''
             )
         """)
+        # Índice para performance multi-tenant
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tenant ON produtos(tenant_id)")
     else:
-        # SQLite — cria tabela base
         cur.execute("""
             CREATE TABLE IF NOT EXISTS produtos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT DEFAULT 'default',
                 codigo TEXT, fornecedor TEXT, descricao TEXT, custo REAL,
                 data_analise TEXT, arquivo_origem TEXT, pagina_origem INTEGER DEFAULT 0
             )
         """)
-        # Adiciona colunas novas se não existirem
         cur.execute("PRAGMA table_info(produtos)")
         existentes = {row[1] for row in cur.fetchall()}
         novas = {
+            'tenant_id': "TEXT DEFAULT 'default'",
             'preco_ml': 'REAL DEFAULT 0',
             'taxa_categoria': 'REAL DEFAULT 0.165',
             'custo_frete': 'REAL DEFAULT 0',
@@ -138,16 +130,13 @@ def garantir_schema():
 
 
 def dict_row(cur, row):
-    """Converte row para dict compatível com SQLite e Postgres"""
     if USAR_POSTGRES:
         cols = [desc[0] for desc in cur.description]
         return dict(zip(cols, row))
-    else:
-        return dict(row)
+    return dict(row)
 
 
 def placeholder():
-    """Retorna placeholder correto para cada banco"""
     return "%s" if USAR_POSTGRES else "?"
 
 

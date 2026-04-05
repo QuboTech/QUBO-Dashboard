@@ -16,6 +16,7 @@ Substitui: dashboard_web.py v2
 Autor: Claude para QUBO
 Data: 2026-02
 """
+import os
 import json
 import io
 import time
@@ -26,8 +27,10 @@ from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, send_file
 from db import get_conn, existe_banco, garantir_schema, dict_row, placeholder, DB_PATH, USAR_POSTGRES
+from auth import login_required, get_tenant_id, get_usuario_nome, verificar_login, LOGIN_HTML, carregar_usuarios
 
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "qubo-secret-2026-change-this")
 logger = logging.getLogger(__name__)
 
 # Filtro Jinja para formato brasileiro (vírgula decimal)
@@ -428,11 +431,16 @@ HTML_TEMPLATE = """
 <div class="container">
     <div class="header-row">
         <h1>📊 QUBO v3 — {{ stats.total }} Produtos</h1>
+        <span style="color:#8b92a5;font-size:.75rem">👤 {{ usuario_nome }}</span>
         <div class="header-actions">
             <button class="btn btn-sm" onclick="abrirAlertaDiario()" style="background:#f59e0b;color:#000" title="Resumo diário: vendas, perguntas, estoque, concorrentes">🔔 Alerta Diário</button>
+            <a href="/logout" class="btn btn-sm" style="background:#2d3452;color:#e4e6eb">Sair</a>
+            <button class="btn btn-sm" onclick="abrirTendencias()" style="background:#ec4899;color:#fff">🔥 Tendências</button>
+            <button class="btn btn-sm" onclick="abrirSaudeAnuncios()" style="background:#0284c7;color:#fff">🏥 Saúde</button>
             <button class="btn btn-sm" onclick="abrirAlertaDiario()" style="background:#f59e0b;color:#000">📊 Alerta Diário</button>
             <button class="btn btn-secondary btn-sm" onclick="mostrarModalProduto()">➕ Produto</button>
             <button class="btn btn-primary btn-sm" onclick="location.href='/processar'" style="background:#f59e0b">🚀 Processar PDFs</button>
+            <button class="btn btn-primary btn-sm" onclick="abrirUploadPDF()" style="background:#7c3aed;color:#fff">📤 Enviar PDF</button>
             <button class="btn btn-sm" onclick="location.href='/ml-auth'" style="background:#2563eb;color:#fff">🔗 ML Auth</button>
             <button class="btn btn-sm" onclick="atualizarTaxasML()" style="background:#c084fc;color:#000" id="btnTaxas">📊 Atualizar Taxas ML</button>
             <a href="/exportar" class="btn btn-success btn-sm">📥 Exportar Excel</a>
@@ -538,6 +546,7 @@ HTML_TEMPLATE = """
                 <button class="btn btn-primary btn-sm" data-id="{{ p.id }}" data-desc="{{ p.descricao|e }}" onclick="buscarML(this.dataset.id, this.dataset.desc)" title="Buscar preço médio no ML">🔍</button>
                 <button class="btn btn-sm" style="background:#7c3aed;color:#fff" data-id="{{ p.id }}" onclick="pesquisarProduto({{ p.id }})" title="Agente: análise de mercado">🤖</button>
                 <button class="btn btn-sm" style="background:#059669;color:#fff" data-id="{{ p.id }}" onclick="precificarProduto({{ p.id }})" title="Agente: precificação inteligente">💰</button>
+                <button class="btn btn-sm" style="background:#0891b2;color:#fff" data-id="{{ p.id }}" data-desc="{{ p.descricao|e }}" data-custo="{{ p.custo }}" data-peso="{{ p.peso_kg or 0 }}" data-emb="{{ p.custo_embalagem or 0 }}" onclick="analisarViabilidade(this)" title="Agente: viabilidade de produto">📈</button>
             </td>
             <td style="color:#fbbf24">{{ p.pagina_origem or '-' }}</td>
             <td><button class="btn btn-sm" style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;font-size:.65rem" onclick="deletarProduto({{ p.id }})" title="Deletar">🗑️</button></td>
@@ -984,6 +993,361 @@ function mostrarModalPesquisa(d){
 }
 
 
+
+
+
+function abrirUploadPDF(){
+    const h=`<div id="modalUpload" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:24px;border-radius:10px;border:1px solid #7c3aed;width:480px;max-width:95vw">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <h3 style="color:#7c3aed">📤 Enviar Catálogo PDF</h3>
+            <button onclick="document.getElementById('modalUpload').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:4px 10px;cursor:pointer">✕</button>
+        </div>
+        <div style="background:#0a0e27;border:2px dashed #2d3452;border-radius:8px;padding:24px;text-align:center;margin-bottom:16px;cursor:pointer" 
+             onclick="document.getElementById('pdfInput').click()"
+             ondragover="event.preventDefault();this.style.borderColor='#7c3aed'"
+             ondragleave="this.style.borderColor='#2d3452'"
+             ondrop="event.preventDefault();handleDrop(event)">
+            <div style="font-size:2.5rem;margin-bottom:8px">📄</div>
+            <div style="color:#e4e6eb;font-weight:600">Clique para selecionar ou arraste o PDF aqui</div>
+            <div style="color:#8b92a5;font-size:.78rem;margin-top:4px">O nome do arquivo será usado como nome do fornecedor</div>
+        </div>
+        <input type="file" id="pdfInput" accept=".pdf" style="display:none" onchange="uploadPDF(this.files[0])">
+        <div id="uploadStatus" style="display:none;background:#0a0e27;border-radius:6px;padding:12px;font-size:.83rem">
+            <div id="uploadMsg" style="color:#fbbf24">⏳ Processando...</div>
+            <div id="uploadBar" style="height:4px;background:#667eea;border-radius:2px;width:0%;margin-top:8px;transition:width .5s"></div>
+        </div>
+    </div></div>`;
+    document.getElementById('modalUpload')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function handleDrop(e){
+    const file=e.dataTransfer.files[0];
+    if(file&&file.name.toLowerCase().endsWith('.pdf')) uploadPDF(file);
+    else showToast('❌ Apenas arquivos PDF',true);
+}
+
+function uploadPDF(file){
+    if(!file) return;
+    document.getElementById('uploadStatus').style.display='block';
+    document.getElementById('uploadMsg').innerHTML='⏳ Enviando <strong>'+file.name+'</strong>...';
+    document.getElementById('uploadBar').style.width='30%';
+    
+    const fd=new FormData();
+    fd.append('arquivo',file);
+    
+    fetch('/api/upload-pdf',{method:'POST',body:fd})
+    .then(r=>r.json()).then(d=>{
+        document.getElementById('uploadBar').style.width='100%';
+        if(d.ok){
+            document.getElementById('uploadMsg').innerHTML=
+                '✅ <strong>'+d.arquivo+'</strong> — '+d.produtos_extraidos+' produtos extraídos via '+d.provider+'!';
+            document.getElementById('uploadMsg').style.color='#4ade80';
+            setTimeout(()=>{
+                document.getElementById('modalUpload')?.remove();
+                location.reload();
+            },2000);
+        } else {
+            document.getElementById('uploadMsg').innerHTML='❌ '+d.erro;
+            document.getElementById('uploadMsg').style.color='#f87171';
+            document.getElementById('uploadBar').style.background='#f87171';
+        }
+    }).catch(()=>{
+        document.getElementById('uploadMsg').innerHTML='❌ Erro de conexão';
+        document.getElementById('uploadMsg').style.color='#f87171';
+    });
+}
+
+function abrirTendencias(){
+    showToast('🔥 Buscando tendências do ML...');
+    fetch('/api/tendencias')
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalTendencias(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalTendencias(d){
+    const fmt=(v,dec=2)=>v!=null?parseFloat(v).toFixed(dec).replace('.',','):'-';
+    const linhas=(d.tendencias||[]).map((t,i)=>{
+        const op=t.oportunidade||{};
+        const jaTemBadge=t.ja_tenho_no_catalogo
+            ?'<span style="background:#065f46;color:#4ade80;padding:1px 6px;border-radius:8px;font-size:.63rem;margin-left:4px">✅ Tenho</span>':'';
+        return `<tr style="border-bottom:1px solid #1a1f3a;${t.ja_tenho_no_catalogo?'background:#0a1a0a':''}">
+            <td style="padding:5px 8px;color:#8b92a5;font-weight:700">${i+1}</td>
+            <td style="padding:5px 8px;color:#e4e6eb;font-weight:600">${t.keyword}${jaTemBadge}</td>
+            <td style="padding:5px 8px;color:#4ade80">${t.preco_min?'R$ '+fmt(t.preco_min):'-'}</td>
+            <td style="padding:5px 8px;color:#fbbf24">${t.preco_medio?'R$ '+fmt(t.preco_medio):'-'}</td>
+            <td style="padding:5px 8px;color:#c084fc">${t.vendas_acum_top5?parseInt(t.vendas_acum_top5).toLocaleString('pt-BR'):'-'}</td>
+            <td style="padding:5px 8px">
+                <span style="color:${op.cor||'#8b92a5'};font-size:.8rem">${op.icone||''} ${op.label||''}</span>
+            </td>
+            <td style="padding:5px 8px">
+                <a href="${t.url_ml||'https://www.mercadolivre.com.br/'+encodeURIComponent(t.keyword)}" target="_blank"
+                   style="color:#667eea;font-size:.75rem">Ver ↗</a>
+            </td>
+        </tr>`;
+    }).join('');
+
+    const tenhoCount=(d.tendencias||[]).filter(t=>t.ja_tenho_no_catalogo).length;
+    const altaOp=(d.tendencias||[]).filter(t=>t.score>=50).length;
+
+    const h=`<div id="modalTend" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #ec4899;width:900px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+            <div>
+                <h3 style="color:#ec4899">🔥 Tendências do Mercado Livre</h3>
+                <div style="color:#8b92a5;font-size:.75rem">${d.total} produtos em alta agora</div>
+            </div>
+            <button onclick="document.getElementById('modalTend').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:5px 10px;cursor:pointer">✕</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Tendências hoje</div>
+                <div style="font-size:1.4rem;font-weight:700;color:#ec4899">${d.total}</div>
+            </div>
+            <div style="background:#0a1a0a;padding:10px;border-radius:6px;text-align:center;border:1px solid #065f46">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Você já tem</div>
+                <div style="font-size:1.4rem;font-weight:700;color:#4ade80">${tenhoCount}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Alta oportunidade</div>
+                <div style="font-size:1.4rem;font-weight:700;color:#fbbf24">${altaOp}</div>
+            </div>
+        </div>
+        <div style="overflow-x:auto;border-radius:5px">
+        <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+            <thead><tr style="border-bottom:1px solid #2d3452">
+                <th style="padding:6px 8px;color:#8b92a5">#</th>
+                <th style="padding:6px 8px;color:#8b92a5">Produto em Alta</th>
+                <th style="padding:6px 8px;color:#8b92a5">Preço Min</th>
+                <th style="padding:6px 8px;color:#8b92a5">Preço Médio</th>
+                <th style="padding:6px 8px;color:#8b92a5">Vendas Top 5</th>
+                <th style="padding:6px 8px;color:#8b92a5">Oportunidade</th>
+                <th style="padding:6px 8px;color:#8b92a5">ML</th>
+            </tr></thead>
+            <tbody>${linhas}</tbody>
+        </table>
+        </div>
+    </div></div>`;
+    document.getElementById('modalTend')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function abrirSaudeAnuncios(){
+    showToast('🏥 Verificando saúde dos anúncios...');
+    fetch('/api/saude-anuncios')
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalSaude(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalSaude(d){
+    const fmt=(v,dec=2)=>v!=null?parseFloat(v).toFixed(dec).replace('.',','):'-';
+    const r=d.resumo||{};
+    const scoreCor=d.score_saude>=90?'#4ade80':d.score_saude>=70?'#fbbf24':'#f87171';
+
+    const renderLista=(lista,titulo,cor,icone)=>{
+        if(!lista||lista.length===0)return'';
+        const items=lista.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid #1a1f3a;font-size:.8rem">
+            <span style="color:#e4e6eb;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.titulo||a.id}</span>
+            ${a.preco?'<span style="color:#4ade80">R$ '+fmt(a.preco)+'</span>':''}
+            ${a.visitas_30d!=null?'<span style="color:#8b92a5">'+a.visitas_30d+' visitas/30d</span>':''}
+            ${a.link?'<a href="'+a.link+'" target="_blank" style="color:#667eea;font-size:.72rem">Ver ↗</a>':''}
+        </div>`).join('');
+        return `<div style="margin-bottom:12px">
+            <div style="color:${cor};font-weight:700;font-size:.82rem;margin-bottom:5px">${icone} ${titulo} (${lista.length})</div>
+            <div style="background:#0a0e27;border-radius:6px;border:1px solid #2d3452">${items}</div>
+        </div>`;
+    };
+
+    const anunciosHTML=(d.anuncios||[]).map(a=>`
+        <tr style="border-bottom:1px solid #1a1f3a">
+            <td style="padding:4px 7px;color:#e4e6eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem">${a.titulo}</td>
+            <td style="padding:4px 7px;color:#4ade80;font-weight:600">R$ ${fmt(a.preco)}</td>
+            <td style="padding:4px 7px;color:#fbbf24">${a.visitas_30d||0}</td>
+            <td style="padding:4px 7px;color:#c084fc">${a.sold_quantity||0}</td>
+            <td style="padding:4px 7px;color:${a.conversao_pct>=2?'#4ade80':a.conversao_pct>=1?'#fbbf24':'#f87171'}">${a.conversao_pct||0}%</td>
+            <td style="padding:4px 7px;color:#8b92a5">${a.estoque||0}</td>
+            <td><a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem">Ver ↗</a></td>
+        </tr>`).join('');
+
+    const h=`<div id="modalSaude" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #0284c7;width:900px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+            <div>
+                <h3 style="color:#0284c7">🏥 Saúde dos Anúncios</h3>
+                <div style="color:#8b92a5;font-size:.72rem">Gerado em ${d.gerado_em}</div>
+            </div>
+            <div style="text-align:center">
+                <div style="font-size:2.2rem;font-weight:900;color:${scoreCor}">${d.score_saude}</div>
+                <div style="font-size:.75rem;color:${scoreCor}">${d.classificacao_saude}</div>
+            </div>
+            <button onclick="document.getElementById('modalSaude').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;align-self:flex-start">✕</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Total anúncios</div>
+                <div style="font-size:1.3rem;font-weight:700;color:#667eea">${r.total_anuncios||0}</div>
+            </div>
+            <div style="background:#064e3b;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Saudáveis</div>
+                <div style="font-size:1.3rem;font-weight:700;color:#4ade80">${r.total_saudaveis||0}</div>
+            </div>
+            <div style="background:#3b2700;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Em risco</div>
+                <div style="font-size:1.3rem;font-weight:700;color:#fbbf24">${r.total_warning||0}</div>
+            </div>
+            <div style="background:#450a0a;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Críticos</div>
+                <div style="font-size:1.3rem;font-weight:700;color:#f87171">${r.total_unhealthy||0}</div>
+            </div>
+        </div>
+
+        ${renderLista(d.unhealthy,'Anúncios Críticos — Perdendo Exposição','#f87171','🚨')}
+        ${renderLista(d.warning,'Anúncios em Risco','#fbbf24','⚠️')}
+        ${renderLista(d.sem_visitas,'Anúncios Ativos Sem Visitas (últimos 30 dias)','#8b92a5','👻')}
+
+        ${anunciosHTML?`<div style="color:#8b92a5;font-size:.7rem;text-transform:uppercase;margin-bottom:5px;margin-top:10px">Detalhes — Top 10 Anúncios (Visitas 30d)</div>
+        <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.77rem;border-radius:5px">
+            <thead><tr style="border-bottom:1px solid #2d3452">
+                <th style="padding:4px 7px;color:#8b92a5">Título</th>
+                <th style="padding:4px 7px;color:#8b92a5">Preço</th>
+                <th style="padding:4px 7px;color:#8b92a5">Visitas 30d</th>
+                <th style="padding:4px 7px;color:#8b92a5">Vendas</th>
+                <th style="padding:4px 7px;color:#8b92a5">Conversão</th>
+                <th style="padding:4px 7px;color:#8b92a5">Estoque</th>
+                <th style="padding:4px 7px;color:#8b92a5">Link</th>
+            </tr></thead>
+            <tbody>${anunciosHTML}</tbody>
+        </table>`:''}
+    </div></div>`;
+    document.getElementById('modalSaude')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function analisarViabilidade(btn){
+    const id = btn.dataset.id;
+    const desc = btn.dataset.desc;
+    const custo = parseFloat(btn.dataset.custo)||0;
+    const peso = parseFloat(btn.dataset.peso)||0;
+    const emb = parseFloat(btn.dataset.emb)||0;
+    const margem = parseFloat(prompt('Margem mínima desejada (%):', '20'))||20;
+    showToast('📈 Analisando viabilidade...');
+    fetch('/api/viabilidade',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:parseInt(id), termo:desc, custo, peso, embalagem:emb, margem_minima:margem})})
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalViabilidade(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalViabilidade(d){
+    const fmt=(v,dec=2)=>v!=null?parseFloat(v).toFixed(dec).replace('.',','):'-';
+    const corM=(m)=>m==null?'#8b92a5':m>=20?'#4ade80':m>=10?'#fbbf24':'#f87171';
+    const corInsight=(t)=>t==='positivo'?'#4ade80':t==='negativo'?'#f87171':t==='info'?'#93c5fd':'#fbbf24';
+
+    const scoreCor = d.score>=70?'#4ade80':d.score>=45?'#fbbf24':'#f87171';
+    const insightsHTML=(d.insights||[]).map(ins=>`
+        <div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #2d3452">
+            <span style="color:${corInsight(ins.tipo)};font-size:1rem">${ins.tipo==='positivo'?'✅':ins.tipo==='negativo'?'❌':ins.tipo==='info'?'ℹ️':'⚠️'}</span>
+            <span style="color:#e4e6eb;font-size:.82rem">${ins.msg}</span>
+        </div>`).join('');
+
+    const topHTML=(d.top_anuncios||[]).map((a,i)=>`
+        <tr style="border-bottom:1px solid #1a1f3a">
+            <td style="padding:3px 7px;color:#8b92a5">${i+1}</td>
+            <td style="padding:3px 7px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.titulo}</td>
+            <td style="padding:3px 7px;color:#4ade80;font-weight:700">R$ ${fmt(a.preco)}</td>
+            <td style="padding:3px 7px;color:#fbbf24">${parseInt(a.vendas_acumuladas).toLocaleString('pt-BR')}</td>
+            <td style="padding:3px 7px;color:#8b92a5;font-size:.72rem">${a.vendedor}</td>
+            <td><a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem">Ver ↗</a></td>
+        </tr>`).join('');
+
+    const margemBlock = d.custo > 0 ? `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Margem no mínimo</div>
+                <div style="font-size:1.1rem;font-weight:700;color:${corM(d.margem_no_min)}">${fmt(d.margem_no_min,1)}%</div>
+                <div style="font-size:.7rem;color:#8b92a5">R$ ${fmt(d.preco_min)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Margem no mediano</div>
+                <div style="font-size:1.1rem;font-weight:700;color:${corM(d.margem_no_mediano)}">${fmt(d.margem_no_mediano,1)}%</div>
+                <div style="font-size:.7rem;color:#8b92a5">R$ ${fmt(d.preco_mediano)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Lucro mensal est.</div>
+                <div style="font-size:1.1rem;font-weight:700;color:#c084fc">R$ ${fmt(d.lucro_mensal_estimado)}</div>
+                <div style="font-size:.7rem;color:#8b92a5">estimativa 5% do mercado</div>
+            </div>
+        </div>` : '<div style="color:#8b92a5;font-size:.8rem;margin-bottom:12px">⚠️ Cadastre o custo do produto para ver análise de margem.</div>';
+
+    const h=`<div id="modalViab" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #0891b2;width:820px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+            <div>
+                <h3 style="color:#0891b2">📈 Análise de Viabilidade</h3>
+                <div style="color:#e4e6eb;font-size:.83rem">${d.termo_buscado}</div>
+                <div style="color:#8b92a5;font-size:.72rem">${d.total_anuncios} anúncios · Taxa ML: ${fmt(d.taxa_percentual,1)}% · ${d.categoria_id||''}</div>
+            </div>
+            <div style="text-align:center">
+                <div style="font-size:2rem;font-weight:900;color:${scoreCor}">${d.score}</div>
+                <div style="font-size:.75rem;color:${scoreCor}">${d.cor} ${d.classificacao}</div>
+            </div>
+            <button onclick="document.getElementById('modalViab').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;align-self:flex-start">✕</button>
+        </div>
+
+        <!-- Demanda -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Vendas acum. top 20</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#4ade80">${parseInt(d.total_vendas_top20_acumulado).toLocaleString('pt-BR')}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Demanda/mês estimada</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#fbbf24">${fmt(d.demanda_mercado_mensal,0)}</div>
+                <div style="font-size:.65rem;color:#8b92a5">total mercado</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Preço mínimo</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#f87171">R$ ${fmt(d.preco_min)}</div>
+            </div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                <div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Preço mediano</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#4ade80">R$ ${fmt(d.preco_mediano)}</div>
+            </div>
+        </div>
+
+        ${margemBlock}
+
+        <!-- Insights -->
+        <div style="background:#0a0e27;border-radius:7px;padding:12px;margin-bottom:12px">
+            <div style="color:#8b92a5;font-size:.7rem;text-transform:uppercase;margin-bottom:6px">💡 Insights do Agente</div>
+            ${insightsHTML}
+        </div>
+
+        <!-- Top anúncios -->
+        <div style="color:#8b92a5;font-size:.7rem;text-transform:uppercase;margin-bottom:5px">Top Anúncios por Vendas</div>
+        <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.77rem;border-radius:5px">
+            <thead><tr style="border-bottom:1px solid #2d3452">
+                <th style="padding:4px 7px;color:#8b92a5">#</th>
+                <th style="padding:4px 7px;color:#8b92a5">Título</th>
+                <th style="padding:4px 7px;color:#8b92a5">Preço</th>
+                <th style="padding:4px 7px;color:#8b92a5">Vendas</th>
+                <th style="padding:4px 7px;color:#8b92a5">Vendedor</th>
+                <th style="padding:4px 7px;color:#8b92a5">Link</th>
+            </tr></thead>
+            <tbody>${topHTML}</tbody>
+        </table>
+    </div></div>`;
+    document.getElementById('modalViab')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
+}
+
 function precificarProduto(id){
     const margem = prompt('Margem mínima desejada (%):', '20');
     if(margem === null) return;
@@ -1162,7 +1526,29 @@ function salvarNovoProduto(){
 # ROTAS
 # ============================================================
 
+
+@app.route('/login')
+def pagina_login():
+    return LOGIN_HTML
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    d = request.get_json()
+    usuario = d.get('usuario', '').strip()
+    senha = d.get('senha', '')
+    if verificar_login(usuario, senha):
+        session['usuario'] = usuario
+        session.permanent = True
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'erro': 'Usuário ou senha incorretos'})
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
 @app.route('/')
+@login_required
 def index():
     if not DB_PATH.exists():
         return render_template_string(HTML_TEMPLATE,produtos=[],stats={'total':0,'fornecedores':0,'com_preco_ml':0,'sem_preco_ml':0,'viaveis':0,'nao_viaveis':0,'pendentes':0,'total_filtrado':0},fornecedores=[],f={},pg=1,total_paginas=1,url_pg=lambda p:'/',aliquota_imposto_pct=0)
@@ -1187,6 +1573,11 @@ def index():
     
     where = " AND ".join(w) if w else "1=1"
     
+    tenant = get_tenant_id()
+    if "tenant_id" not in where:
+        w.append("tenant_id = ?")
+        p.append(tenant)
+        where = " AND ".join(w) if w else "1=1"
     cur.execute(f"SELECT COUNT(*) FROM produtos WHERE {where}", p)
     total_f = cur.fetchone()[0]
     total_pg = max(1, (total_f + f['pp'] - 1) // f['pp'])
@@ -1210,7 +1601,7 @@ def index():
         a = dict(request.args); a['pagina'] = p
         return '/?' + '&'.join(f'{k}={v}' for k,v in a.items() if v)
     
-    return render_template_string(HTML_TEMPLATE, produtos=produtos, stats=stats, fornecedores=fornecedores, f=f, pg=pg, total_paginas=total_pg, url_pg=url_pg, aliquota_imposto_pct=round(get_aliquota()*100, 1))
+    return render_template_string(HTML_TEMPLATE, produtos=produtos, stats=stats, fornecedores=fornecedores, f=f, pg=pg, total_paginas=total_pg, url_pg=url_pg, aliquota_imposto_pct=round(get_aliquota()*100, 1), usuario_nome=get_usuario_nome())
 
 
 @app.route('/api/atualizar', methods=['POST'])
@@ -1388,6 +1779,7 @@ def api_aliquota():
 
 
 @app.route('/exportar')
+@login_required
 def exportar():
     try:
         import pandas as pd
@@ -1756,6 +2148,7 @@ window.addEventListener('load',()=>{
 
 
 @app.route('/escolhidos')
+@login_required
 def escolhidos():
     if not DB_PATH.exists():
         return render_template_string(ESCOLHIDOS_HTML, produtos=[], viaveis=0, nao_viaveis=0, lucro_total=0, margem_media=0)
@@ -1777,6 +2170,7 @@ def escolhidos():
 
 
 @app.route('/exportar-escolhidos')
+@login_required
 def exportar_escolhidos():
     try:
         import pandas as pd
@@ -2004,6 +2398,7 @@ function atualizarStatus(){
 """
 
 @app.route('/processar')
+@login_required
 def pagina_processar():
     import os as _os
     from dotenv import load_dotenv
@@ -2324,6 +2719,7 @@ document.getElementById('codeInput').addEventListener('keydown',e=>{if(e.key==='
 """
 
 @app.route('/ml-auth')
+@login_required
 def pagina_ml_auth():
     try:
         from ml_buscador import MLBuscador
@@ -2579,6 +2975,142 @@ def api_alerta_diario():
     except Exception as e:
         return jsonify({'ok': False, 'erro': str(e)})
 
+
+
+
+
+@app.route('/api/upload-pdf', methods=['POST'])
+@login_required
+def api_upload_pdf():
+    """Upload e processamento de PDF diretamente pelo dashboard"""
+    import tempfile
+    import os as _os
+    
+    try:
+        if 'arquivo' not in request.files:
+            return jsonify({'ok': False, 'erro': 'Nenhum arquivo enviado'})
+        
+        arquivo = request.files['arquivo']
+        if not arquivo.filename.lower().endswith('.pdf'):
+            return jsonify({'ok': False, 'erro': 'Apenas arquivos PDF são aceitos'})
+        
+        from multi_extractor import MultiExtractor
+        from auth import get_tenant_id
+        
+        tenant = get_tenant_id()
+        fornecedor = _os.path.splitext(arquivo.filename)[0]
+        nome_arquivo = arquivo.filename
+        
+        # Salva temporariamente
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            arquivo.save(tmp.name)
+            tmp_path = tmp.name
+        
+        try:
+            extractor = MultiExtractor()
+            produtos, info = extractor.extrair_de_pdf(tmp_path, fornecedor)
+        finally:
+            try:
+                _os.unlink(tmp_path)
+            except Exception:
+                pass
+        
+        if not produtos:
+            return jsonify({'ok': False, 'erro': f'Nenhum produto encontrado em {nome_arquivo}'})
+        
+        # Salva no banco com tenant_id
+        conn = get_conn()
+        cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        
+        # Garante schema
+        garantir_schema()
+        
+        salvos = 0
+        from datetime import datetime
+        for p in produtos:
+            try:
+                cur.execute(
+                    f"""INSERT INTO produtos 
+                        (tenant_id, codigo, fornecedor, descricao, custo, data_analise, arquivo_origem)
+                        VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                    (tenant, p.codigo, fornecedor, p.descricao,
+                     p.preco_unitario, datetime.now().isoformat(), nome_arquivo)
+                )
+                salvos += 1
+            except Exception as e:
+                logger.warning(f"Erro ao salvar produto: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'ok': True,
+            'arquivo': nome_arquivo,
+            'fornecedor': fornecedor,
+            'produtos_extraidos': salvos,
+            'provider': info.get('provider', 'desconhecido')
+        })
+        
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/tendencias')
+def api_tendencias():
+    """Painel de Tendências ML"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_tendencias import buscar_tendencias
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro!'})
+        resultado = buscar_tendencias(ml.auth.access_token)
+        return jsonify(resultado)
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/saude-anuncios')
+def api_saude_anuncios():
+    """Monitor de Saúde dos Anúncios"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_saude import monitorar_saude
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro!'})
+        resultado = monitorar_saude(ml.auth.access_token, ml.auth.user_id)
+        return jsonify(resultado)
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/viabilidade', methods=['POST'])
+def api_viabilidade():
+    """Agente de Viabilidade de Produto"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_viabilidade import analisar_viabilidade
+        d = request.get_json()
+        produto_id = d.get('id')
+        termo = d.get('termo', '')
+        custo = float(d.get('custo', 0))
+        peso = float(d.get('peso', 0))
+        emb = float(d.get('embalagem', 0))
+        imp = float(d.get('imposto', 0))
+        margem = float(d.get('margem_minima', 20))
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro!'})
+        resultado = analisar_viabilidade(
+            termo_ou_id=termo,
+            token_ml=ml.auth.access_token,
+            custo=custo, peso_kg=peso, embalagem=emb,
+            imposto_pct=imp, margem_minima=margem,
+            produto_id=produto_id
+        )
+        return jsonify(resultado)
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/precificar', methods=['POST'])
 def api_precificar():
