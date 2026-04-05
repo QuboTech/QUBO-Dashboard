@@ -24,6 +24,71 @@ logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path("data/ml_token.json")
 TOKEN_FILE.parent.mkdir(exist_ok=True)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+
+def _salvar_token_db(token_data: dict):
+    """Salva token no Supabase para persistir entre deploys"""
+    if not DATABASE_URL:
+        return
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ml_tokens (
+                id TEXT PRIMARY KEY DEFAULT 'principal',
+                access_token TEXT,
+                refresh_token TEXT,
+                user_id TEXT,
+                expires_at TEXT,
+                salvo_em TEXT
+            )
+        """)
+        cur.execute("""
+            INSERT INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
+            VALUES ('principal', %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                access_token = EXCLUDED.access_token,
+                refresh_token = EXCLUDED.refresh_token,
+                user_id = EXCLUDED.user_id,
+                expires_at = EXCLUDED.expires_at,
+                salvo_em = EXCLUDED.salvo_em
+        """, (
+            token_data.get('access_token'),
+            token_data.get('refresh_token'),
+            str(token_data.get('user_id', '')),
+            token_data.get('expires_at'),
+            token_data.get('salvo_em', datetime.now().isoformat())
+        ))
+        conn.commit()
+        conn.close()
+        logger.info("✅ ML: Token salvo no Supabase")
+    except Exception as e:
+        logger.warning(f"⚠️ ML: Erro ao salvar token no Supabase: {e}")
+
+
+def _carregar_token_db() -> dict:
+    """Carrega token do Supabase"""
+    if not DATABASE_URL:
+        return {}
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = 'principal'")
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return {
+                'access_token': row[0],
+                'refresh_token': row[1],
+                'user_id': row[2],
+                'expires_at': row[3]
+            }
+    except Exception as e:
+        logger.warning(f"⚠️ ML: Erro ao carregar token do Supabase: {e}")
+    return {}
 
 CLIENT_ID = os.getenv("ML_CLIENT_ID", "5055987535998228")
 CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "pUQOnnKVNgnPuwutwMKXxQ2LcoLPjYpz")
@@ -42,9 +107,18 @@ class MLAuth:
         self._carregar_token()
     
     def _carregar_token(self):
-        if TOKEN_FILE.exists():
+        # 1. Tenta Supabase primeiro (persiste entre deploys)
+        data = _carregar_token_db()
+        
+        # 2. Fallback para arquivo local
+        if not data and TOKEN_FILE.exists():
             try:
                 data = json.loads(TOKEN_FILE.read_text())
+            except Exception:
+                data = {}
+        
+        if data:
+            try:
                 self.access_token = data.get('access_token')
                 self.refresh_token = data.get('refresh_token')
                 self.user_id = data.get('user_id')
@@ -54,6 +128,7 @@ class MLAuth:
                 if self.access_token:
                     logger.info(f"🟢 ML: Token carregado (user_id: {self.user_id})")
                     if self._token_expirado():
+                        logger.info("🔄 ML: Token expirado, renovando automaticamente...")
                         self._renovar_token()
             except Exception as e:
                 logger.warning(f"⚠️ ML: Erro ao carregar token: {e}")
@@ -71,8 +146,14 @@ class MLAuth:
             'expires_at': self.expires_at.isoformat(),
             'salvo_em': datetime.now().isoformat()
         }
-        TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
-        logger.info(f"✅ ML: Token salvo (expira em {expires_in//3600}h)")
+        # Salva no Supabase (persiste entre deploys)
+        _salvar_token_db(token_data)
+        # Salva também em arquivo local (fallback)
+        try:
+            TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
+        except Exception:
+            pass
+        logger.info(f"✅ ML: Token salvo no Supabase + local (expira em {expires_in//3600}h)")
     
     def _token_expirado(self):
         if not self.expires_at:
