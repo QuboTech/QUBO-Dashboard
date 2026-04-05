@@ -429,7 +429,9 @@ HTML_TEMPLATE = """
     <div class="header-row">
         <h1>📊 QUBO v3 — {{ stats.total }} Produtos</h1>
         <div class="header-actions">
-            <button class="btn btn-sm" onclick="mostrarModalProduto()" style="background:#4ade80;color:#000">➕ Produto</button>
+            <button class="btn btn-sm" onclick="abrirAlertaDiario()" style="background:#f59e0b;color:#000" title="Resumo diário: vendas, perguntas, estoque, concorrentes">🔔 Alerta Diário</button>
+            <button class="btn btn-sm" onclick="abrirAlertaDiario()" style="background:#f59e0b;color:#000">📊 Alerta Diário</button>
+            <button class="btn btn-secondary btn-sm" onclick="mostrarModalProduto()">➕ Produto</button>
             <button class="btn btn-primary btn-sm" onclick="location.href='/processar'" style="background:#f59e0b">🚀 Processar PDFs</button>
             <button class="btn btn-sm" onclick="location.href='/ml-auth'" style="background:#2563eb;color:#fff">🔗 ML Auth</button>
             <button class="btn btn-sm" onclick="atualizarTaxasML()" style="background:#c084fc;color:#000" id="btnTaxas">📊 Atualizar Taxas ML</button>
@@ -534,7 +536,8 @@ HTML_TEMPLATE = """
             <td id="st-{{ p.id }}">{% if p.preco_ml and p.preco_ml > 0 %}{% if p.viavel %}<span class="viavel-sim">VIÁVEL</span>{% else %}<span class="viavel-nao">NÃO</span>{% endif %}{% else %}<span class="viavel-pendente">—</span>{% endif %}</td>
             <td style="display:flex;gap:3px">
                 <button class="btn btn-primary btn-sm" data-id="{{ p.id }}" data-desc="{{ p.descricao|e }}" onclick="buscarML(this.dataset.id, this.dataset.desc)" title="Buscar preço médio no ML">🔍</button>
-                <button class="btn btn-sm" style="background:#7c3aed;color:#fff" data-id="{{ p.id }}" onclick="pesquisarProduto({{ p.id }})" title="Agente: análise completa de mercado">🤖</button>
+                <button class="btn btn-sm" style="background:#7c3aed;color:#fff" data-id="{{ p.id }}" onclick="pesquisarProduto({{ p.id }})" title="Agente: análise de mercado">🤖</button>
+                <button class="btn btn-sm" style="background:#059669;color:#fff" data-id="{{ p.id }}" onclick="precificarProduto({{ p.id }})" title="Agente: precificação inteligente">💰</button>
             </td>
             <td style="color:#fbbf24">{{ p.pagina_origem or '-' }}</td>
             <td><button class="btn btn-sm" style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;font-size:.65rem" onclick="deletarProduto({{ p.id }})" title="Deletar">🗑️</button></td>
@@ -688,7 +691,173 @@ function atualizarTaxasML(){
     }).catch(()=>{btn.disabled=false;btn.textContent='📊 Atualizar Taxas ML';showToast('❌ Erro',true);});
 }
 
-function pesquisarProduto(id){
+function abrirAlertaDiario(){
+    // Abre modal de loading imediatamente
+    const loadingHtml = `<div id="modalAlerta" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:24px;border-radius:10px;border:1px solid #f59e0b;width:860px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="text-align:center;padding:30px;color:#f59e0b">
+            <div style="font-size:2rem;margin-bottom:12px">🔔</div>
+            <div style="font-size:1.1rem;font-weight:700">Gerando Alerta Diário...</div>
+            <div style="color:#8b92a5;font-size:.85rem;margin-top:8px">Buscando vendas, perguntas, estoque e concorrentes no ML</div>
+        </div>
+    </div></div>`;
+    document.getElementById('modalAlerta')?.remove();
+    document.body.insertAdjacentHTML('beforeend', loadingHtml);
+
+    // Pega top 3 produtos do dashboard como termos de monitoramento
+    const termos = [...document.querySelectorAll('.desc-col')].slice(0,3).map(el => el.title || el.textContent.trim()).filter(Boolean);
+
+    fetch('/api/alerta-diario', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({termos})
+    })
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('modalAlerta')?.remove();
+        if(!d.ok){showToast('❌ '+d.erro, true); return;}
+        mostrarModalAlerta(d);
+    })
+    .catch(() => {
+        document.getElementById('modalAlerta')?.remove();
+        showToast('❌ Erro ao gerar alerta', true);
+    });
+}
+
+function mostrarModalAlerta(d){
+    const fmt = (v, dec=2) => v != null ? parseFloat(v).toFixed(dec).replace('.',',') : '-';
+    const v = d.vendas || {};
+    const p = d.perguntas || {};
+    const r = d.reputacao || {};
+    const eb = d.estoque_baixo || [];
+    const pc = d.precos_concorrentes || [];
+
+    // Perguntas pendentes
+    const perguntasHtml = p.total > 0
+        ? `<div style="margin-top:6px">${(p.exemplos||[]).map(q =>
+            `<div style="padding:5px 8px;background:#0a0e27;border-radius:4px;margin-bottom:4px;font-size:.78rem">
+                <span style="color:#8b92a5">${q.data}</span>
+                <span style="color:#e4e6eb;margin-left:8px">${q.texto}...</span>
+                <a href="https://www.mercadolivre.com.br/perguntas" target="_blank" style="color:#667eea;margin-left:8px;font-size:.72rem">Responder ↗</a>
+            </div>`).join('')}
+          </div>`
+        : `<div style="color:#4ade80;font-size:.85rem;margin-top:6px">✅ Nenhuma pergunta pendente!</div>`;
+
+    // Estoque baixo
+    const estoqueHtml = eb.length > 0
+        ? eb.map(e => `<div style="padding:5px 8px;background:#450a0a;border-radius:4px;margin-bottom:4px;font-size:.78rem;display:flex;justify-content:space-between">
+            <span style="color:#fca5a5">${e.titulo}</span>
+            <span style="color:#f87171;font-weight:700">${e.estoque} un.</span>
+          </div>`).join('')
+        : `<div style="color:#4ade80;font-size:.85rem">✅ Estoque OK em todos os produtos!</div>`;
+
+    // Preços concorrentes
+    const precosHtml = pc.length > 0
+        ? `<table style="width:100%;border-collapse:collapse;font-size:.78rem;margin-top:8px">
+            <thead><tr>
+                <th style="text-align:left;padding:4px 8px;color:#8b92a5;border-bottom:1px solid #2d3452">Produto</th>
+                <th style="text-align:right;padding:4px 8px;color:#8b92a5;border-bottom:1px solid #2d3452">Mín</th>
+                <th style="text-align:right;padding:4px 8px;color:#8b92a5;border-bottom:1px solid #2d3452">Médio</th>
+                <th style="text-align:right;padding:4px 8px;color:#8b92a5;border-bottom:1px solid #2d3452">Máx</th>
+                <th style="text-align:right;padding:4px 8px;color:#8b92a5;border-bottom:1px solid #2d3452">Anúncios</th>
+            </tr></thead>
+            <tbody>${pc.map(c => `<tr style="border-bottom:1px solid #1a1f3a">
+                <td style="padding:4px 8px;color:#e4e6eb">${c.termo}</td>
+                <td style="padding:4px 8px;text-align:right;color:#f87171">R$ ${fmt(c.preco_min)}</td>
+                <td style="padding:4px 8px;text-align:right;color:#fbbf24">R$ ${fmt(c.preco_medio)}</td>
+                <td style="padding:4px 8px;text-align:right;color:#4ade80">R$ ${fmt(c.preco_max)}</td>
+                <td style="padding:4px 8px;text-align:right;color:#8b92a5">${(c.total_anuncios||0).toLocaleString('pt-BR')}</td>
+            </tr>`).join('')}</tbody>
+          </table>`
+        : `<div style="color:#8b92a5;font-size:.85rem">Nenhum produto monitorado.</div>`;
+
+    const corRep = r.nivel?.includes('Verde') ? '#4ade80' : r.nivel?.includes('Amarelo') ? '#fbbf24' : '#f87171';
+
+    const h = `<div id="modalAlerta" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #f59e0b;width:860px;max-width:95vw;max-height:90vh;overflow-y:auto">
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <div>
+                <h3 style="color:#f59e0b;margin-bottom:2px">🔔 Alerta Diário QUBO</h3>
+                <div style="color:#8b92a5;font-size:.75rem">Gerado em ${d.gerado_em} · ${d.tempo_segundos}s</div>
+            </div>
+            <button onclick="document.getElementById('modalAlerta').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:6px 12px;cursor:pointer">✕ Fechar</button>
+        </div>
+
+        <!-- Vendas -->
+        <div style="margin-bottom:14px">
+            <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:8px">📦 Vendas</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+                <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:1.4rem;font-weight:700;color:#4ade80">${v.vendas_24h||0}</div>
+                    <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase">Pedidos 24h</div>
+                </div>
+                <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:1.4rem;font-weight:700;color:#4ade80">R$ ${fmt(v.valor_24h)}</div>
+                    <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase">Faturamento 24h</div>
+                </div>
+                <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:1.4rem;font-weight:700;color:#fbbf24">${v.vendas_7d||0}</div>
+                    <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase">Pedidos 7 dias</div>
+                </div>
+                <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:1.4rem;font-weight:700;color:#fbbf24">R$ ${fmt(v.valor_7d)}</div>
+                    <div style="font-size:.65rem;color:#8b92a5;text-transform:uppercase">Faturamento 7d</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reputação + Perguntas -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div style="background:#0a0e27;padding:12px;border-radius:6px">
+                <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:8px">⭐ Reputação</div>
+                <div style="font-size:1.1rem;font-weight:700;color:${corRep}">${r.nivel||'—'}</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px">
+                    <div style="text-align:center">
+                        <div style="font-size:.9rem;font-weight:700;color:#4ade80">${r.vendas_concluidas||0}</div>
+                        <div style="font-size:.62rem;color:#8b92a5">Vendas</div>
+                    </div>
+                    <div style="text-align:center">
+                        <div style="font-size:.9rem;font-weight:700;color:${(r.reclamacoes_pct||0)>0.02?'#f87171':'#4ade80'}">${fmt(r.reclamacoes_pct*100||0,1)}%</div>
+                        <div style="font-size:.62rem;color:#8b92a5">Reclamações</div>
+                    </div>
+                    <div style="text-align:center">
+                        <div style="font-size:.9rem;font-weight:700;color:${(r.cancelamentos_pct||0)>0.02?'#f87171':'#4ade80'}">${fmt(r.cancelamentos_pct*100||0,1)}%</div>
+                        <div style="font-size:.62rem;color:#8b92a5">Cancelamentos</div>
+                    </div>
+                </div>
+            </div>
+            <div style="background:#0a0e27;padding:12px;border-radius:6px">
+                <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:4px">
+                    💬 Perguntas Pendentes
+                    ${p.total>0 ? `<span style="background:#f87171;color:#fff;padding:1px 7px;border-radius:10px;margin-left:6px;font-size:.7rem">${p.total}</span>` : ''}
+                </div>
+                ${perguntasHtml}
+            </div>
+        </div>
+
+        <!-- Estoque Baixo -->
+        <div style="margin-bottom:14px">
+            <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:8px">
+                📉 Estoque Baixo (≤ 3 unidades)
+                ${eb.length>0 ? `<span style="background:#f59e0b;color:#000;padding:1px 7px;border-radius:10px;margin-left:6px;font-size:.7rem">${eb.length} produto(s)</span>` : ''}
+            </div>
+            ${estoqueHtml}
+        </div>
+
+        <!-- Preços Concorrentes -->
+        <div>
+            <div style="color:#8b92a5;font-size:.72rem;text-transform:uppercase;margin-bottom:4px">📊 Preços Concorrentes</div>
+            ${precosHtml}
+        </div>
+
+    </div></div>`;
+
+    document.getElementById('modalAlerta')?.remove();
+    document.body.insertAdjacentHTML('beforeend', h);
+}
+
+
     showToast('🤖 Analisando mercado...');
     fetch('/api/pesquisar-produto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
     .then(r=>r.json()).then(d=>{
@@ -812,6 +981,123 @@ function mostrarModalPesquisa(d){
     
     document.getElementById('modalPesquisa')?.remove();
     document.body.insertAdjacentHTML('beforeend', h);
+}
+
+
+function precificarProduto(id){
+    const margem = prompt('Margem mínima desejada (%):', '20');
+    if(margem === null) return;
+    showToast('💰 Analisando precificação...');
+    fetch('/api/precificar',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:id, margem_minima:parseFloat(margem)||20})})
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalPrecificacao(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalPrecificacao(d){
+    const fmt=(v,dec=2)=>v!=null?v.toFixed(dec).replace('.',','):'-';
+    const corM=(m)=>m==null?'#8b92a5':m>=20?'#4ade80':m>=10?'#fbbf24':'#f87171';
+    const rec=d.recomendacao||{};
+    const c=d.cenarios||{};
+    const renderCenario=(nome,dados,emoji)=>{
+        if(!dados)return'';
+        const dest=rec.cenario===nome?'border:2px solid #667eea;':'';
+        const recTag=rec.cenario===nome?'<span style="background:#667eea;color:#fff;padding:1px 6px;border-radius:8px;font-size:.6rem;margin-left:4px">⭐ RECOMENDADO</span>':'';
+        const badge=dados.viavel?'<span style="background:#065f46;color:#4ade80;padding:1px 5px;border-radius:8px;font-size:.6rem">VIÁVEL</span>':'<span style="background:#450a0a;color:#f87171;padding:1px 5px;border-radius:8px;font-size:.6rem">INVIÁVEL</span>';
+        return `<div style="background:#0a0e27;padding:12px;border-radius:7px;${dest}">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-weight:700;font-size:.83rem">${emoji} ${nome.charAt(0).toUpperCase()+nome.slice(1)}${recTag}</span>${badge}</div>
+            <div style="font-size:1.3rem;font-weight:700;color:#4ade80">R$ ${fmt(dados.preco)}</div>
+            <div style="color:${corM(dados.margem)};font-size:.83rem">Margem: ${fmt(dados.margem,1)}%</div>
+            <div style="color:#8b92a5;font-size:.7rem;margin-top:3px">${dados.descricao}</div>
+            <button onclick="aplicarPreco(${d.produto_id},${dados.preco},${d.taxa_percentual});document.getElementById('modalPrec').remove()"
+                style="margin-top:8px;padding:3px 10px;border:none;border-radius:4px;background:#2d3452;color:#e4e6eb;cursor:pointer;font-size:.72rem">Usar este preço</button>
+        </div>`;
+    };
+    const rivais=(d.top_concorrentes||[]).map((r,i)=>`<tr style="border-bottom:1px solid #1a1f3a">
+        <td style="padding:3px 7px;color:#8b92a5">${i+1}</td>
+        <td style="padding:3px 7px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.titulo}</td>
+        <td style="padding:3px 7px;color:#4ade80;font-weight:700">R$ ${fmt(r.preco)}</td>
+        <td style="padding:3px 7px;color:#fbbf24">${(r.vendas||0).toLocaleString('pt-BR')}</td>
+        <td><a href="${r.link}" target="_blank" style="color:#667eea;font-size:.72rem">Ver ↗</a></td>
+    </tr>`).join('');
+    const h=`<div id="modalPrec" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #059669;width:820px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+            <div><h3 style="color:#059669">💰 Precificação Inteligente</h3>
+            <div style="color:#e4e6eb;font-size:.83rem">${d.produto_nome}</div>
+            <div style="color:#8b92a5;font-size:.72rem">${d.total_concorrentes} concorrentes · Taxa ML: ${fmt(d.taxa_percentual,1)}% · "${d.termo_buscado}"</div></div>
+            <button onclick="document.getElementById('modalPrec').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:5px 10px;cursor:pointer">✕</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Menor rival</div><div style="font-size:1.1rem;font-weight:700;color:#f87171">R$ ${fmt(d.preco_min_ml)}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Mediano</div><div style="font-size:1.1rem;font-weight:700;color:#4ade80">R$ ${fmt(d.preco_mediano)}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Seu custo</div><div style="font-size:1.1rem;font-weight:700;color:#fbbf24">R$ ${fmt(d.custo)}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Mín viável ${fmt(d.margem_minima_alvo,0)}%</div><div style="font-size:1.1rem;font-weight:700;color:#c084fc">R$ ${fmt(d.preco_minimo_viavel)}</div></div>
+        </div>
+        ${rec.motivo?`<div style="background:#1a2a1a;border:1px solid #059669;border-radius:6px;padding:10px;margin-bottom:12px"><span style="color:#4ade80;font-weight:700">💡 </span><span style="color:#e4e6eb;font-size:.83rem">${rec.motivo}</span></div>`:''}
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+            ${renderCenario('agressivo',c.agressivo,'🔥')}
+            ${renderCenario('competitivo',c.competitivo,'⚖️')}
+            ${renderCenario('premium',c.premium,'👑')}
+        </div>
+        <div style="color:#8b92a5;font-size:.7rem;text-transform:uppercase;margin-bottom:5px">Top Concorrentes</div>
+        <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.77rem;border-radius:5px">
+            <thead><tr style="border-bottom:1px solid #2d3452"><th style="padding:4px 7px;color:#8b92a5">#</th><th style="padding:4px 7px;color:#8b92a5">Título</th><th style="padding:4px 7px;color:#8b92a5">Preço</th><th style="padding:4px 7px;color:#8b92a5">Vendas</th><th style="padding:4px 7px;color:#8b92a5">Link</th></tr></thead>
+            <tbody>${rivais}</tbody>
+        </table>
+    </div></div>`;
+    document.getElementById('modalPrec')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function abrirAlertaDiario(){
+    showToast('📊 Gerando alerta diário...');
+    fetch('/api/alerta-diario')
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){showToast('❌ '+d.erro,true);return;}
+        mostrarModalAlerta(d);
+    }).catch(()=>showToast('❌ Erro conexão',true));
+}
+
+function mostrarModalAlerta(d){
+    const fmt=(v)=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+    const vendas=d.vendas||{};
+    const rep=d.reputacao||{};
+    const perguntas=d.perguntas||{};
+    const alertasHTML=(d.alertas||[]).map(a=>{
+        const bg=a.tipo==='urgente'?'#450a0a':a.tipo==='aviso'?'#3b2700':a.tipo==='ok'?'#064e3b':'#1e3a5f';
+        const cor=a.tipo==='urgente'?'#f87171':a.tipo==='aviso'?'#fbbf24':a.tipo==='ok'?'#4ade80':'#93c5fd';
+        return `<div style="background:${bg};border-radius:5px;padding:9px 12px;display:flex;align-items:center;gap:9px">
+            <span style="font-size:1.2rem">${a.icone}</span><span style="color:${cor};font-size:.83rem">${a.msg}</span></div>`;
+    }).join('');
+    const varHTML=(d.variacao_precos||[]).map(v=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #2d3452;font-size:.78rem">
+            <span style="color:#e4e6eb;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.produto}</span>
+            <span style="color:#8b92a5">Meu: R$ ${fmt(v.seu_preco)}</span>
+            <span style="color:#fbbf24">Rival: R$ ${fmt(v.menor_concorrente)}</span>
+            <span style="color:${v.variacao_pct>=0?'#4ade80':'#f87171'}">${v.status}</span>
+        </div>`).join('');
+    const h=`<div id="modalAlerta" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px">
+    <div style="background:#1a1f3a;padding:20px;border-radius:10px;border:1px solid #f59e0b;width:680px;max-width:95vw;max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;margin-bottom:14px">
+            <div><h3 style="color:#f59e0b">📊 Alerta Diário</h3>
+            <div style="color:#8b92a5;font-size:.72rem">Gerado em ${d.gerado_em}</div></div>
+            <button onclick="document.getElementById('modalAlerta').remove()" style="background:#2d3452;color:#e4e6eb;border:none;border-radius:5px;padding:5px 10px;cursor:pointer">✕</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:14px">${alertasHTML||'<div style="color:#8b92a5">Nenhum alerta.</div>'}</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Vendas hoje</div><div style="font-size:1.2rem;font-weight:700;color:#4ade80">${vendas.hoje_qtd||0}</div><div style="font-size:.75rem;color:#8b92a5">R$ ${fmt(vendas.hoje_valor)}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Vendas semana</div><div style="font-size:1.2rem;font-weight:700;color:#667eea">${vendas.semana_qtd||0}</div><div style="font-size:.75rem;color:#8b92a5">R$ ${fmt(vendas.semana_valor)}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Perguntas abertas</div><div style="font-size:1.2rem;font-weight:700;color:${(perguntas.nao_respondidas||0)>0?'#f87171':'#4ade80'}">${perguntas.nao_respondidas||0}</div></div>
+            <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5;text-transform:uppercase">Reputação</div><div style="font-size:.85rem;font-weight:700;color:#fbbf24">${(rep.nivel||'N/A').replace(/_/g,' ')}</div></div>
+        </div>
+        ${varHTML?`<div style="color:#8b92a5;font-size:.7rem;text-transform:uppercase;margin-bottom:6px">Variação de Preços (Escolhidos)</div>${varHTML}`:''}
+    </div></div>`;
+    document.getElementById('modalAlerta')?.remove();
+    document.body.insertAdjacentHTML('beforeend',h);
 }
 
 function usarPrecoMediano(id, preco, taxa){
@@ -2265,6 +2551,76 @@ def api_atualizar_taxas_ml():
         return jsonify({'ok': True, 'total': total, 'atualizados': atualizados, 'erros': erros})
     except ImportError:
         return jsonify({'ok': False, 'erro': 'ml_buscador.py não encontrado'})
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/alerta-diario', methods=['POST'])
+def api_alerta_diario():
+    """Agente de Alerta Diário — resumo completo da operação ML"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_alerta import AgenteAlerta
+
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro! Clique em 🔗 ML Auth'})
+
+        d = request.get_json() or {}
+        termos = d.get('termos', [])  # produtos a monitorar
+
+        agente = AgenteAlerta(ml.auth.access_token, str(ml.auth.user_id))
+        alerta = agente.gerar_alerta(termos_monitorados=termos if termos else None)
+        alerta['ok'] = True
+        return jsonify(alerta)
+
+    except ImportError as e:
+        return jsonify({'ok': False, 'erro': f'Módulo não encontrado: {e}'})
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/precificar', methods=['POST'])
+def api_precificar():
+    """Agente de Precificação Inteligente"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_precificacao import precificar_produto
+
+        d = request.get_json()
+        produto_id = d.get('id')
+        margem_minima = float(d.get('margem_minima', 20))
+        imposto_pct = float(d.get('imposto_pct', 0))
+
+        if not produto_id:
+            return jsonify({'ok': False, 'erro': 'ID obrigatório'})
+
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro!'})
+
+        resultado = precificar_produto(produto_id, ml.auth.access_token,
+                                        margem_minima, imposto_pct)
+        return jsonify(resultado)
+
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/alerta-diario')
+def api_alerta_diario():
+    """Agente de Alerta Diário"""
+    try:
+        from ml_buscador import MLBuscador
+        from agente_alerta import gerar_alerta_diario
+
+        ml = MLBuscador()
+        if not ml.esta_autenticado():
+            return jsonify({'ok': False, 'erro': 'Conecte-se ao ML primeiro!'})
+
+        resultado = gerar_alerta_diario(ml.auth.access_token, ml.auth.user_id)
+        return jsonify(resultado)
+
     except Exception as e:
         return jsonify({'ok': False, 'erro': str(e)})
 
