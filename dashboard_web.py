@@ -1,4 +1,4 @@
-﻿"""
+"""
 dashboard_web.py - Dashboard V3 com Planilha ML Integrada
 ==========================================================
 INTEGRAÇÃO COMPLETA com planilha oficial Mercado Livre:
@@ -2951,6 +2951,7 @@ def api_atualizar_taxas_ml():
         return jsonify({'ok': False, 'erro': str(e)})
 
 
+
 @app.route('/api/upload-pdf', methods=['POST'])
 @login_required
 def api_upload_pdf():
@@ -3184,4 +3185,3 @@ if __name__ == "__main__":
         threading.Thread(target=abrir_nav, daemon=True).start()
     
     app.run(host=host, port=port, debug=False)
-
