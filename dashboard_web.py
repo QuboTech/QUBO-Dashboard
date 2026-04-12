@@ -25,7 +25,7 @@ import webbrowser
 import logging
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, render_template_string, request, jsonify, send_file
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect
 from db import get_conn, existe_banco, garantir_schema, dict_row, placeholder, DB_PATH, USAR_POSTGRES
 from auth import login_required, get_tenant_id, get_usuario_nome, verificar_login, LOGIN_HTML, carregar_usuarios
 
