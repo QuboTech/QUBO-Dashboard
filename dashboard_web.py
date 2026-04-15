@@ -1222,28 +1222,42 @@ input:focus,select:focus,textarea:focus{border-color:#667eea;outline:none}
     </div>
   </div>
 
-  <!-- UPLOAD PDF -->
+  <!-- UPLOAD PDF EM LOTE -->
   <div class="section">
     <div class="section-header">
       <span style="font-size:1.3rem">📤</span>
       <div>
-        <h2>Importar Catálogo PDF</h2>
-        <div style="color:#8b92a5;font-size:.72rem">Extração automática com IA (Groq + Mistral)</div>
+        <h2>Importar Catálogos PDF</h2>
+        <div style="color:#8b92a5;font-size:.72rem">Múltiplos PDFs de uma vez — extração com IA (Groq + Mistral)</div>
       </div>
     </div>
     <div class="section-body">
-      <div class="upload-zone" onclick="document.getElementById('pdfInput').click()"
+      <div class="upload-zone" id="upload-zone"
+           onclick="document.getElementById('pdfInput').click()"
            ondragover="event.preventDefault();this.style.borderColor='#667eea'"
            ondragleave="this.style.borderColor='#2d3452'"
            ondrop="event.preventDefault();handleDrop(event)">
-        <div class="upload-icon">📄</div>
-        <div style="color:#e4e6eb;font-weight:600;margin-bottom:6px">Clique ou arraste o PDF aqui</div>
-        <div style="color:#8b92a5;font-size:.75rem">O nome do arquivo vira o nome do fornecedor</div>
+        <div class="upload-icon">📁</div>
+        <div style="color:#e4e6eb;font-weight:600;margin-bottom:6px">Clique ou arraste PDFs aqui</div>
+        <div style="color:#8b92a5;font-size:.75rem">Selecione um ou vários PDFs · O nome do arquivo vira o fornecedor</div>
       </div>
-      <input type="file" id="pdfInput" accept=".pdf" style="display:none" onchange="uploadPDF(this.files[0])">
+      <input type="file" id="pdfInput" accept=".pdf" multiple style="display:none" onchange="iniciarFila(this.files)">
+
+      <!-- Barra de progresso geral -->
       <div class="progress-bar" id="progress-bar">
         <div class="progress-fill" id="progress-fill"></div>
       </div>
+
+      <!-- Contador geral -->
+      <div id="batch-counter" style="display:none;font-size:.78rem;color:#8b92a5;margin-top:8px;margin-bottom:8px"></div>
+
+      <!-- Fila de arquivos -->
+      <div id="fila-upload" style="display:none;margin-top:12px">
+        <div style="font-size:.72rem;color:#8b92a5;text-transform:uppercase;margin-bottom:8px;font-weight:600">Fila de processamento</div>
+        <div id="fila-itens"></div>
+      </div>
+
+      <!-- Resumo final -->
       <div id="upload-result" class="result-box"></div>
     </div>
   </div>
@@ -1326,35 +1340,101 @@ function reconectarML(){
 }
 
 function handleDrop(e){
-  const file = e.dataTransfer.files[0];
-  if(file && file.name.toLowerCase().endsWith('.pdf')) uploadPDF(file);
-  else showToast('❌ Apenas arquivos PDF', false);
+  const files = Array.from(e.dataTransfer.files).filter(f=>f.name.toLowerCase().endsWith('.pdf'));
+  if(!files.length){ showToast('❌ Apenas arquivos PDF', false); return; }
+  iniciarFila(files);
 }
 
-function uploadPDF(file){
-  if(!file) return;
+function iniciarFila(fileList){
+  const files = Array.from(fileList).filter(f=>f.name.toLowerCase().endsWith('.pdf'));
+  if(!files.length){ showToast('❌ Nenhum PDF selecionado', false); return; }
+
+  // Reseta UI
   const bar = document.getElementById('progress-bar');
   const fill = document.getElementById('progress-fill');
   const result = document.getElementById('upload-result');
-  bar.style.display='block'; fill.style.width='20%'; result.style.display='none';
-  showToast('⏳ Enviando '+file.name+'...');
-  const fd = new FormData(); fd.append('arquivo', file);
-  fill.style.width='50%';
-  fetch('/api/upload-pdf',{method:'POST',body:fd})
-  .then(r=>r.json()).then(d=>{
+  const counter = document.getElementById('batch-counter');
+  const fila = document.getElementById('fila-upload');
+  const itens = document.getElementById('fila-itens');
+
+  bar.style.display='block'; fill.style.width='0%';
+  result.style.display='none';
+  fila.style.display='block';
+  itens.innerHTML='';
+  counter.style.display='block';
+  counter.textContent='Preparando '+files.length+' arquivo(s)...';
+
+  // Cria uma linha por arquivo na fila
+  files.forEach((f,i)=>{
+    const row = document.createElement('div');
+    row.id='fila-item-'+i;
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;background:#0a0e27;margin-bottom:6px;font-size:.78rem';
+    row.innerHTML=`<span id="fila-icon-${i}" style="font-size:1rem">⏳</span>
+      <span style="flex:1;color:#c4c9d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
+      <span id="fila-status-${i}" style="color:#8b92a5;white-space:nowrap">Aguardando...</span>`;
+    itens.appendChild(row);
+  });
+
+  // Processa sequencialmente
+  let totalSalvos=0, ok=0, erros=0;
+  (async()=>{
+    for(let i=0;i<files.length;i++){
+      const f=files[i];
+      const icon=document.getElementById('fila-icon-'+i);
+      const status=document.getElementById('fila-status-'+i);
+      const row=document.getElementById('fila-item-'+i);
+
+      icon.textContent='🔄';
+      status.style.color='#667eea';
+      status.textContent='Enviando...';
+      counter.textContent=`Processando ${i+1} de ${files.length}...`;
+      fill.style.width=((i/files.length)*100)+'%';
+
+      try{
+        const fd=new FormData(); fd.append('arquivo',f);
+        const r=await fetch('/api/upload-pdf',{method:'POST',body:fd});
+        const d=await r.json();
+        if(d.ok){
+          icon.textContent='✅';
+          status.style.color='#4ade80';
+          status.textContent=d.produtos_extraidos+' produtos ('+d.provider+')';
+          row.style.background='#052e16';
+          totalSalvos+=d.produtos_extraidos; ok++;
+        } else {
+          icon.textContent='❌';
+          status.style.color='#f87171';
+          status.textContent=d.erro||'Erro desconhecido';
+          row.style.background='#2d0a0a';
+          erros++;
+        }
+      }catch(e){
+        icon.textContent='❌';
+        status.style.color='#f87171';
+        status.textContent='Erro de conexão';
+        row.style.background='#2d0a0a';
+        erros++;
+      }
+    }
+
+    // Resumo final
     fill.style.width='100%';
+    counter.style.display='none';
     result.style.display='block';
-    if(d.ok){
+    if(ok>0 && erros===0){
       result.style.color='#4ade80';
-      result.innerHTML='✅ <strong>'+d.arquivo+'</strong> — '+d.produtos_extraidos+' produtos extraídos via '+d.provider+'!<br><a href="/" style="color:#667eea">Ver no Dashboard →</a>';
-      showToast('✅ '+d.produtos_extraidos+' produtos importados!');
+      result.innerHTML=`✅ <strong>${ok} PDF(s)</strong> importados com sucesso · <strong>${totalSalvos} produtos</strong> extraídos!<br><a href="/" style="color:#667eea">Ver no Dashboard →</a>`;
+      showToast('✅ '+totalSalvos+' produtos importados!');
+    } else if(ok>0){
+      result.style.color='#f59e0b';
+      result.innerHTML=`⚠️ <strong>${ok} OK</strong> (${totalSalvos} produtos) · <strong>${erros} com erro</strong><br><a href="/" style="color:#667eea">Ver no Dashboard →</a>`;
+      showToast('⚠️ '+ok+' OK, '+erros+' com erro', false);
     } else {
       result.style.color='#f87171';
-      result.innerHTML='❌ '+d.erro;
-      showToast('❌ '+d.erro, false);
+      result.innerHTML='❌ Todos os uploads falharam. Verifique os erros acima.';
+      showToast('❌ Falha no upload', false);
     }
-    setTimeout(()=>{bar.style.display='none';fill.style.width='0%';},2000);
-  }).catch(()=>{showToast('❌ Erro de conexão',false);bar.style.display='none';});
+    setTimeout(()=>{bar.style.display='none';fill.style.width='0%';},3000);
+  })();
 }
 
 function salvarPasta(){
