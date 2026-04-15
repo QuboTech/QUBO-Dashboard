@@ -18,9 +18,8 @@ import os
 import sys
 import time
 import logging
-import sqlite3
-import json
 import argparse
+import requests
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -34,137 +33,72 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PASTA = os.getenv('PASTA_MONITORADA', '')
-DATABASE_URL = os.getenv('DATABASE_URL', '')
-DB_PATH = Path('data/viabilidade.db')
+PASTA            = os.getenv('PASTA_MONITORADA', '')
+DASHBOARD_URL    = os.getenv('DASHBOARD_URL', 'https://qubo-dashboard.onrender.com')
+WATCHER_API_KEY  = os.getenv('WATCHER_API_KEY', 'qubo-watcher-2026')
+WATCHER_TENANT   = os.getenv('WATCHER_TENANT', 'gustavo')
 EXTENSAO_ENVIADO = '.enviado'
 
 
-def get_conn():
-    """Conexão com banco correto (Postgres ou SQLite)"""
-    if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
-        import psycopg2
-        return psycopg2.connect(DATABASE_URL)
-    else:
-        DB_PATH.parent.mkdir(exist_ok=True)
-        return sqlite3.connect(DB_PATH)
-
-
 def garantir_tabela():
-    conn = get_conn()
-    cur = conn.cursor()
-    if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS produtos (
-                id SERIAL PRIMARY KEY,
-                codigo TEXT DEFAULT '',
-                fornecedor TEXT DEFAULT '',
-                descricao TEXT DEFAULT '',
-                custo REAL DEFAULT 0,
-                preco_ml REAL DEFAULT 0,
-                taxa_categoria REAL DEFAULT 0.165,
-                peso_kg REAL DEFAULT 0,
-                custo_embalagem REAL DEFAULT 0,
-                custo_frete REAL DEFAULT 0,
-                taxa_fixa_ml REAL DEFAULT 0,
-                imposto_valor REAL DEFAULT 0,
-                custo_total REAL DEFAULT 0,
-                margem_percentual REAL DEFAULT 0,
-                margem_reais REAL DEFAULT 0,
-                viavel INTEGER DEFAULT 0,
-                link_ml TEXT DEFAULT '',
-                tipo_anuncio TEXT DEFAULT 'classico',
-                escolhido INTEGER DEFAULT 0,
-                custo_full REAL DEFAULT 0,
-                custo_ads REAL DEFAULT 0,
-                promo_percentual REAL DEFAULT 0,
-                margem_alvo REAL DEFAULT 25,
-                preco_ideal REAL DEFAULT 0,
-                preco_final REAL DEFAULT 0,
-                lucro_final REAL DEFAULT 0,
-                margem_final REAL DEFAULT 0,
-                pagina_origem INTEGER DEFAULT 0,
-                data_analise TEXT DEFAULT '',
-                arquivo_origem TEXT DEFAULT ''
+    """No modo HTTP não é necessário criar tabela localmente."""
+    pass
+
+
+def salvar_produtos_via_http(caminho_pdf: Path) -> dict:
+    """Envia o PDF para o endpoint do dashboard via HTTP. Retorna dict com ok/erro/salvos."""
+    url = f"{DASHBOARD_URL.rstrip('/')}/api/watcher-upload"
+    try:
+        with open(caminho_pdf, 'rb') as f:
+            resp = requests.post(
+                url,
+                headers={'X-API-Key': WATCHER_API_KEY},
+                files={'arquivo': (caminho_pdf.name, f, 'application/pdf')},
+                data={'tenant_id': WATCHER_TENANT},
+                timeout=120
             )
-        """)
-    else:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS produtos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                codigo TEXT, fornecedor TEXT, descricao TEXT, custo REAL,
-                data_analise TEXT, arquivo_origem TEXT, pagina_origem INTEGER DEFAULT 0
-            )
-        """)
-    conn.commit()
-    conn.close()
-
-
-def salvar_produtos(produtos, fornecedor, nome_arquivo):
-    """Salva lista de produtos no banco"""
-    conn = get_conn()
-    cur = conn.cursor()
-    salvos = 0
-    
-    is_pg = DATABASE_URL and DATABASE_URL.startswith('postgresql')
-    ph = '%s' if is_pg else '?'
-
-    for p in produtos:
-        try:
-            cur.execute(
-                f"""INSERT INTO produtos (codigo, fornecedor, descricao, custo, data_analise, arquivo_origem)
-                   VALUES ({ph},{ph},{ph},{ph},{ph},{ph})""",
-                (p.codigo, fornecedor, p.descricao, p.preco_unitario,
-                 datetime.now().isoformat(), nome_arquivo)
-            )
-            salvos += 1
-        except Exception as e:
-            logger.warning(f"   ⚠️ Erro ao salvar produto: {e}")
-
-    conn.commit()
-    conn.close()
-    return salvos
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 401:
+            return {'ok': False, 'erro': 'API key inválida — verifique WATCHER_API_KEY'}
+        else:
+            return {'ok': False, 'erro': f'HTTP {resp.status_code}: {resp.text[:200]}'}
+    except requests.exceptions.Timeout:
+        return {'ok': False, 'erro': 'Timeout — dashboard demorou mais de 120s (cold start?)'}
+    except requests.exceptions.ConnectionError as e:
+        return {'ok': False, 'erro': f'Sem conexão com o dashboard: {e}'}
+    except Exception as e:
+        return {'ok': False, 'erro': str(e)}
 
 
 def processar_pdf(caminho_pdf: Path) -> bool:
     """
     Processa um PDF:
-    1. Extrai produtos
-    2. Salva no banco
-    3. Renomeia para .enviado
-    Retorna True se sucesso.
+    1. Envia para o dashboard via HTTP (extração + salvamento no Supabase são feitos lá)
+    2. Renomeia para .enviado
+    Retorna True se sucesso ou se o arquivo foi processado (mesmo sem produtos).
     """
-    try:
-        from multi_extractor import MultiExtractor
-        extractor = MultiExtractor()
-    except Exception as e:
-        logger.error(f"❌ Erro ao carregar extrator: {e}")
-        return False
-
-    # Fornecedor = nome do arquivo sem extensão
-    fornecedor = caminho_pdf.stem
     nome_arquivo = caminho_pdf.name
+    logger.info(f"📄 Enviando: {nome_arquivo} → {DASHBOARD_URL}")
 
-    logger.info(f"📄 Processando: {nome_arquivo}")
+    resultado = salvar_produtos_via_http(caminho_pdf)
 
-    try:
-        produtos, info = extractor.extrair_de_pdf(str(caminho_pdf), fornecedor)
-    except Exception as e:
-        logger.error(f"   ❌ Erro na extração: {e}")
-        return False
-
-    if not produtos:
-        logger.warning(f"   ⚠️ Nenhum produto encontrado em {nome_arquivo}")
-        # Mesmo sem produtos, renomeia para não tentar de novo
+    if resultado.get('ok'):
+        salvos = resultado.get('produtos_extraidos', 0)
+        provider = resultado.get('provider', '?')
+        logger.info(f"   ✅ {salvos} produtos salvos (via {provider})")
         _renomear_enviado(caminho_pdf)
         return True
-
-    salvos = salvar_produtos(produtos, fornecedor, nome_arquivo)
-    logger.info(f"   ✅ {salvos} produtos salvos no banco")
-
-    # Renomeia para .enviado
-    _renomear_enviado(caminho_pdf)
-    return True
+    else:
+        erro = resultado.get('erro', 'erro desconhecido')
+        # Sem produtos encontrados = arquivo inválido, renomeia para não retentar
+        if 'Nenhum produto' in erro:
+            logger.warning(f"   ⚠️ {erro}")
+            _renomear_enviado(caminho_pdf)
+            return True
+        # Erros de conexão/timeout: não renomeia, vai tentar de novo
+        logger.error(f"   ❌ {erro}")
+        return False
 
 
 def _renomear_enviado(caminho: Path):
@@ -248,8 +182,8 @@ def main():
         sys.exit(1)
 
     pasta = Path(args.pasta)
-    banco = 'Postgres (Supabase)' if DATABASE_URL else 'SQLite local'
-    logger.info(f"🗄️  Banco: {banco}")
+    logger.info(f"🌐 Dashboard: {DASHBOARD_URL}")
+    logger.info(f"👤 Tenant: {WATCHER_TENANT}")
 
     if args.watch:
         rodar_monitorando(pasta, args.intervalo)

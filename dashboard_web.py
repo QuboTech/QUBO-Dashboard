@@ -2,7 +2,7 @@
 dashboard_web.py - QUBO Dashboard v4
 =====================================
 Dashboard principal focado nos produtos da loja.
-P�gina /config separada para uploads, ML Auth e configurações.
+P�gina /config separada para uploads, ML Auth e configurações.
 
 Autor: Claude para QUBO
 Data: 2026-04
@@ -460,6 +460,48 @@ def api_ml_status():
         ml = MLBuscador()
         return jsonify({'ok': True, 'autenticado': ml.esta_autenticado(), 'user_id': ml.auth.user_id})
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/watcher-upload', methods=['POST'])
+def api_watcher_upload():
+    """Endpoint para o File Watcher local — autenticado por API key, sem sessão."""
+    import tempfile, os as _os
+    api_key = request.headers.get('X-API-Key', '')
+    expected = os.getenv('WATCHER_API_KEY', 'qubo-watcher-2026')
+    if api_key != expected:
+        return jsonify({'ok': False, 'erro': 'Chave de API inválida'}), 401
+    if 'arquivo' not in request.files:
+        return jsonify({'ok': False, 'erro': 'Nenhum arquivo enviado'})
+    arquivo = request.files['arquivo']
+    if not arquivo.filename.lower().endswith('.pdf'):
+        return jsonify({'ok': False, 'erro': 'Apenas arquivos PDF'})
+    tenant = request.form.get('tenant_id', 'gustavo')
+    try:
+        from multi_extractor import MultiExtractor
+        fornecedor = _os.path.splitext(arquivo.filename)[0]; nome = arquivo.filename
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            arquivo.save(tmp.name); tmp_path = tmp.name
+        try:
+            extractor = MultiExtractor()
+            produtos, info = extractor.extrair_de_pdf(tmp_path, fornecedor)
+        finally:
+            try: _os.unlink(tmp_path)
+            except: pass
+        if not produtos:
+            return jsonify({'ok': False, 'erro': f'Nenhum produto encontrado em {nome}'})
+        conn = get_conn(); cur = conn.cursor(); p = ph(); salvos = 0
+        for prod in produtos:
+            try:
+                cur.execute(f"""INSERT INTO produtos (tenant_id, codigo, fornecedor, descricao, custo, data_analise, arquivo_origem)
+                    VALUES ({p},{p},{p},{p},{p},{p},{p})""",
+                    [tenant, prod.codigo, fornecedor, prod.descricao, prod.preco_unitario,
+                     datetime.now().isoformat(), nome])
+                salvos += 1
+            except: pass
+        conn.commit(); conn.close()
+        return jsonify({'ok': True, 'arquivo': nome, 'fornecedor': fornecedor,
+                       'produtos_extraidos': salvos, 'provider': info.get('provider','?')})
+    except Exception as e:
+        return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/upload-pdf', methods=['POST'])
 @login_required
