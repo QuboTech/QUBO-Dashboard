@@ -11,10 +11,33 @@ USAR_POSTGRES = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql"))
 DB_PATH = Path("data/viabilidade.db")
 
 
+def _pooler_url(url: str) -> str:
+    """
+    Converte URL direta do Supabase para Transaction Pooler (IPv4, porta 6543).
+    Necessário porque Render free tier não tem IPv6 e o host direto
+    db.PROJECT.supabase.co resolve APENAS para IPv6.
+
+    Direto:  postgresql://postgres:PASS@db.PROJECT.supabase.co:5432/postgres
+    Pooler:  postgresql://postgres.PROJECT:PASS@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+    """
+    import re
+    m = re.match(
+        r'(postgresql://)(postgres)(:.*?)@db\.([a-z0-9]+)\.supabase\.co:5432(/\S*)',
+        url
+    )
+    if not m:
+        return url  # URL já é pooler ou formato desconhecido
+    _, user, password, project, dbname = m.groups()
+    return f"postgresql://{user}.{project}{password}@aws-0-us-east-1.pooler.supabase.com:6543{dbname}"
+
+
+_DB_URL = _pooler_url(DATABASE_URL) if DATABASE_URL else DATABASE_URL
+
+
 def get_conn():
     if USAR_POSTGRES:
         import psycopg2
-        return psycopg2.connect(DATABASE_URL)
+        return psycopg2.connect(_DB_URL, sslmode="require", connect_timeout=10)
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
