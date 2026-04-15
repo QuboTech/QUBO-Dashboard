@@ -140,4 +140,5 @@ def placeholder():
     return "%s" if USAR_POSTGRES else "?"
 
 
-print(f"🗄️  Banco: {'Postgres (Supabase)' if USAR_POSTGRES else 'SQLite (local)'}")
+import logging as _log
+_log.getLogger(__name__).info("Banco: %s", "Postgres (Supabase)" if USAR_POSTGRES else "SQLite (local)")
