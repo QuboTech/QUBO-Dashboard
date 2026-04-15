@@ -1563,21 +1563,24 @@ tr:hover td{background:#1f2544}
 </body></html>"""
 
 # ════════════════════════════════════════════════════════════════════
-# STARTUP
+# STARTUP — roda tanto com gunicorn quanto com python direto
 # ════════════════════════════════════════════════════════════════════
+def _startup():
+    """Inicializa banco e config. Erros são logados, nunca crasham o app."""
+    try:
+        garantir_schema()
+        logger.info("Schema OK")
+    except Exception as e:
+        logger.error(f"garantir_schema falhou: {e}")
+    try:
+        garantir_config()
+        logger.info("Config OK")
+    except Exception as e:
+        logger.error(f"garantir_config falhou: {e}")
+
+_startup()   # executa ao importar o módulo (gunicorn + python direto)
+
 if __name__ == '__main__':
-    garantir_schema()
-    garantir_config()
     PORT = int(os.getenv('PORT', 10000))
-    IS_RENDER = os.getenv('RENDER', '')
-    print()
-    print("=" * 60)
-    print("  QUBO Dashboard v4")
-    print("=" * 60)
-    print(f"  URL: http://0.0.0.0:{PORT}")
-    print(f"  Banco: {'Postgres (Supabase)' if USAR_POSTGRES else 'SQLite local'}")
-    print(f"  Dashboard: /")
-    print(f"  Configurações: /config")
-    print("=" * 60)
-    print()
+    logger.info(f"QUBO Dashboard v4 | 0.0.0.0:{PORT}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
