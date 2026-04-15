@@ -79,6 +79,44 @@ def garantir_schema():
                 arquivo_origem TEXT DEFAULT ''
             )
         """)
+        # Migração: adiciona colunas que faltam em tabelas antigas (v3 → v4)
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='produtos'")
+        existentes = {row[0] for row in cur.fetchall()}
+        novas_colunas = {
+            'tenant_id':        "TEXT DEFAULT 'default'",
+            'preco_ml':         'REAL DEFAULT 0',
+            'taxa_categoria':   'REAL DEFAULT 0.165',
+            'custo_frete':      'REAL DEFAULT 0',
+            'taxa_fixa_ml':     'REAL DEFAULT 0',
+            'peso_kg':          'REAL DEFAULT 0',
+            'custo_embalagem':  'REAL DEFAULT 0',
+            'imposto_valor':    'REAL DEFAULT 0',
+            'custo_total':      'REAL DEFAULT 0',
+            'margem_percentual':'REAL DEFAULT 0',
+            'margem_reais':     'REAL DEFAULT 0',
+            'viavel':           'INTEGER DEFAULT 0',
+            'link_ml':          "TEXT DEFAULT ''",
+            'notas':            "TEXT DEFAULT ''",
+            'pagina_origem':    'INTEGER DEFAULT 0',
+            'tipo_anuncio':     "TEXT DEFAULT 'classico'",
+            'escolhido':        'INTEGER DEFAULT 0',
+            'custo_full':       'REAL DEFAULT 0',
+            'custo_ads':        'REAL DEFAULT 0',
+            'promo_percentual': 'REAL DEFAULT 0',
+            'margem_alvo':      'REAL DEFAULT 25',
+            'preco_ideal':      'REAL DEFAULT 0',
+            'preco_final':      'REAL DEFAULT 0',
+            'lucro_final':      'REAL DEFAULT 0',
+            'margem_final':     'REAL DEFAULT 0',
+            'data_analise':     "TEXT DEFAULT ''",
+            'arquivo_origem':   "TEXT DEFAULT ''",
+        }
+        for col, tipo in novas_colunas.items():
+            if col not in existentes:
+                try:
+                    cur.execute(f"ALTER TABLE produtos ADD COLUMN IF NOT EXISTS {col} {tipo}")
+                except Exception as e:
+                    pass
         # Índice para performance multi-tenant
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tenant ON produtos(tenant_id)")
     else:
