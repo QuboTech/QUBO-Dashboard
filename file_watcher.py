@@ -102,8 +102,15 @@ def processar_pdf(caminho_pdf: Path) -> bool:
 
 
 def _renomear_enviado(caminho: Path):
-    """Renomeia arquivo para .enviado para não reprocessar"""
-    novo_nome = caminho.with_suffix(EXTENSAO_ENVIADO)
+    """Renomeia arquivo para <nome>.enviado para não reprocessar.
+
+    Para arquivos sem extensão usa nome + '.enviado' (não with_suffix que
+    substituiria nada e daria nome incorreto).
+    """
+    if caminho.suffix == '':
+        novo_nome = caminho.with_name(caminho.name + EXTENSAO_ENVIADO)
+    else:
+        novo_nome = caminho.with_suffix(EXTENSAO_ENVIADO)
     try:
         caminho.rename(novo_nome)
         logger.info(f"   📁 Renomeado → {novo_nome.name}")
@@ -111,18 +118,48 @@ def _renomear_enviado(caminho: Path):
         logger.warning(f"   ⚠️ Não foi possível renomear: {e}")
 
 
+def _is_pdf(caminho: Path) -> bool:
+    """Verifica se o arquivo é um PDF válido pelo magic header (%PDF)."""
+    try:
+        with open(caminho, 'rb') as f:
+            return f.read(4) == b'%PDF'
+    except Exception:
+        return False
+
+
 def listar_pdfs_pendentes(pasta: Path):
-    """Lista PDFs que ainda não foram processados (.enviado)"""
+    """Lista PDFs que ainda não foram processados (.enviado).
+
+    Detecta PDFs tanto pela extensão (.pdf/.PDF) quanto pelo magic header (%PDF)
+    para arquivos sem extensão (ex: downloads automáticos).
+    """
     if not pasta.exists():
         logger.error(f"❌ Pasta não encontrada: {pasta}")
         return []
-    
-    # Busca PDFs em subpastas também
-    pdfs = list(pasta.rglob('*.pdf')) + list(pasta.rglob('*.PDF'))
-    
-    # Filtra os que já foram enviados (verificação extra por segurança)
-    pendentes = [p for p in pdfs if not p.with_suffix(EXTENSAO_ENVIADO).exists()]
-    
+
+    candidatos: list[Path] = []
+
+    # 1) PDFs com extensão correta
+    candidatos += list(pasta.rglob('*.pdf'))
+    candidatos += list(pasta.rglob('*.PDF'))
+
+    # 2) Arquivos SEM extensão — verifica magic header
+    for f in pasta.rglob('*'):
+        if f.is_file() and f.suffix == '' and _is_pdf(f):
+            candidatos.append(f)
+
+    # Remove duplicatas e arquivos já enviados
+    vistos = set()
+    pendentes = []
+    for p in candidatos:
+        if p in vistos:
+            continue
+        vistos.add(p)
+        # Arquivo .enviado tem o mesmo nome com sufixo .enviado
+        enviado = p.with_name(p.name + EXTENSAO_ENVIADO)
+        if not enviado.exists() and not p.with_suffix(EXTENSAO_ENVIADO).exists():
+            pendentes.append(p)
+
     return pendentes
 
 
