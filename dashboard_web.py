@@ -446,9 +446,10 @@ def api_ml_auth():
     if not code: return jsonify({'ok': False, 'erro': 'Código obrigatório'})
     try:
         ml = MLBuscador()
-        ok = ml.autenticar_com_code(code)
-        return jsonify({'ok': ok, 'user_id': ml.auth.user_id if ok else None,
-                       'erro': None if ok else 'Código inválido ou expirado'})
+        result = ml.trocar_codigo(code)
+        return jsonify({'ok': result.get('ok', False),
+                       'user_id': result.get('user_id'),
+                       'erro': result.get('erro')})
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/ml-status')
