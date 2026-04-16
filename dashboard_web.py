@@ -102,22 +102,6 @@ def logout():
 # ════════════════════════════════════════════════════════════════════
 # DASHBOARD PRINCIPAL
 # ════════════════════════════════════════════════════════════════════
-@app.route('/api/debug-erro')
-@login_required
-def debug_erro():
-    """Endpoint temporário para diagnóstico — remove após corrigir."""
-    import traceback
-    try:
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM produtos")
-        total = cur.fetchone()[0]
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='produtos' ORDER BY column_name")
-        cols = [r[0] for r in cur.fetchall()]
-        conn.close()
-        return jsonify({'ok': True, 'total_produtos': total, 'colunas': cols})
-    except Exception as e:
-        return jsonify({'ok': False, 'erro': str(e), 'tb': traceback.format_exc()})
-
 @app.route('/')
 @login_required
 def index():
