@@ -37,7 +37,17 @@ _DB_URL = _pooler_url(DATABASE_URL) if DATABASE_URL else DATABASE_URL
 def get_conn():
     if USAR_POSTGRES:
         import psycopg2
-        return psycopg2.connect(_DB_URL, sslmode="require", connect_timeout=10)
+        from urllib.parse import urlparse, unquote
+        p = urlparse(_DB_URL)
+        return psycopg2.connect(
+            host=p.hostname,
+            port=p.port or 5432,
+            dbname=(p.path or '/postgres').lstrip('/') or 'postgres',
+            user=unquote(p.username or 'postgres'),
+            password=unquote(p.password or ''),
+            sslmode='require',
+            connect_timeout=10,
+        )
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -203,3 +213,10 @@ def placeholder():
 
 import logging as _log
 _log.getLogger(__name__).info("Banco: %s", "Postgres (Supabase)" if USAR_POSTGRES else "SQLite (local)")
+if USAR_POSTGRES:
+    from urllib.parse import urlparse as _up
+    _p = _up(_DB_URL)
+    _log.getLogger(__name__).info(
+        "Pooler → host=%s port=%s user=%s db=%s",
+        _p.hostname, _p.port, _p.username, (_p.path or '/postgres').lstrip('/')
+    )
