@@ -360,11 +360,11 @@ def exportar():
 @login_required
 def api_pesquisar_produto():
     try:
-        from agente_pesquisa import pesquisar_produto
+        from agente_pesquisa import analisar_produto_ml
         from ml_buscador import MLBuscador
         d = request.get_json(); ml = MLBuscador()
         if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(pesquisar_produto(d.get('id'), ml.auth.access_token))
+        return jsonify(analisar_produto_ml(d.get('id'), ml.auth.access_token))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/precificar', methods=['POST'])

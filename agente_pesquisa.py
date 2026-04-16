@@ -11,14 +11,13 @@ Data: 2026-04
 import json
 import time
 import logging
-import sqlite3
 import re
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from db import get_conn, USAR_POSTGRES
 
-DB_PATH = Path("data/viabilidade.db")
+logger = logging.getLogger(__name__)
 
 
 def limpar_termo_busca(descricao: str) -> str:
@@ -69,11 +68,15 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
     
     try:
         # Busca dados do produto no banco
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM produtos WHERE id = ?", (produto_id,))
-        produto = dict(cur.fetchone() or {})
+        conn = get_conn(); cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM produtos WHERE id = {ph}", (produto_id,))
+        row = cur.fetchone()
+        if row:
+            cols = [d[0] for d in cur.description]
+            produto = dict(zip(cols, row))
+        else:
+            produto = {}
         conn.close()
         
         if not produto:

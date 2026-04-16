@@ -20,22 +20,16 @@ Data: 2026-04
 import os
 import re
 import logging
-import sqlite3
 from pathlib import Path
 
+from db import get_conn as _db_get_conn, USAR_POSTGRES as _PG
+
 logger = logging.getLogger(__name__)
-DB_PATH = Path("data/viabilidade.db")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 
 def get_conn():
-    if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
-        import psycopg2
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn, True
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn, False
+    """Retorna (conn, is_pg) usando a conexão central de db.py (suporta REST/psycopg2/SQLite)."""
+    return _db_get_conn(), _PG
 
 
 def buscar_tendencias(token_ml: str, limite: int = 20) -> dict:
