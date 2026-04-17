@@ -24,61 +24,56 @@ logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path("data/ml_token.json")
 TOKEN_FILE.parent.mkdir(exist_ok=True)
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 
 def _salvar_token_db(token_data: dict):
-    """Salva token no Supabase para persistir entre deploys"""
-    if not DATABASE_URL:
-        return
+    """Salva token no Supabase via get_conn() (suporta REST/psycopg2/SQLite)"""
     try:
-        import psycopg2
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS ml_tokens (
-                id TEXT PRIMARY KEY DEFAULT 'principal',
-                access_token TEXT,
-                refresh_token TEXT,
-                user_id TEXT,
-                expires_at TEXT,
-                salvo_em TEXT
-            )
-        """)
-        cur.execute("""
-            INSERT INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
-            VALUES ('principal', %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                access_token = EXCLUDED.access_token,
-                refresh_token = EXCLUDED.refresh_token,
-                user_id = EXCLUDED.user_id,
-                expires_at = EXCLUDED.expires_at,
-                salvo_em = EXCLUDED.salvo_em
-        """, (
-            token_data.get('access_token'),
-            token_data.get('refresh_token'),
-            str(token_data.get('user_id', '')),
-            token_data.get('expires_at'),
-            token_data.get('salvo_em', datetime.now().isoformat())
-        ))
-        conn.commit()
-        conn.close()
-        logger.info("✅ ML: Token salvo no Supabase")
+        from db import get_conn, USAR_POSTGRES
+        conn = get_conn(); cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        if USAR_POSTGRES:
+            cur.execute(f"""
+                INSERT INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
+                VALUES ('principal', {ph}, {ph}, {ph}, {ph}, {ph})
+                ON CONFLICT (id) DO UPDATE SET
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    user_id = EXCLUDED.user_id,
+                    expires_at = EXCLUDED.expires_at,
+                    salvo_em = EXCLUDED.salvo_em
+            """, (
+                token_data.get('access_token'),
+                token_data.get('refresh_token'),
+                str(token_data.get('user_id', '')),
+                token_data.get('expires_at'),
+                token_data.get('salvo_em', datetime.now().isoformat())
+            ))
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
+                VALUES ('principal', {ph}, {ph}, {ph}, {ph}, {ph})
+            """, (
+                token_data.get('access_token'),
+                token_data.get('refresh_token'),
+                str(token_data.get('user_id', '')),
+                token_data.get('expires_at'),
+                token_data.get('salvo_em', datetime.now().isoformat())
+            ))
+        conn.commit(); conn.close()
+        logger.info("✅ ML: Token salvo no banco")
     except Exception as e:
-        logger.warning(f"⚠️ ML: Erro ao salvar token no Supabase: {e}")
+        logger.warning(f"⚠️ ML: Erro ao salvar token no banco: {e}")
 
 
 def _carregar_token_db() -> dict:
-    """Carrega token do Supabase"""
-    if not DATABASE_URL:
-        return {}
+    """Carrega token do banco via get_conn() (suporta REST/psycopg2/SQLite)"""
     try:
-        import psycopg2
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = 'principal'")
-        row = cur.fetchone()
-        conn.close()
+        from db import get_conn, USAR_POSTGRES
+        conn = get_conn(); cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", ('principal',))
+        row = cur.fetchone(); conn.close()
         if row:
             return {
                 'access_token': row[0],
@@ -87,7 +82,7 @@ def _carregar_token_db() -> dict:
                 'expires_at': row[3]
             }
     except Exception as e:
-        logger.warning(f"⚠️ ML: Erro ao carregar token do Supabase: {e}")
+        logger.warning(f"⚠️ ML: Erro ao carregar token do banco: {e}")
     return {}
 
 CLIENT_ID = os.getenv("ML_CLIENT_ID", "5055987535998228")

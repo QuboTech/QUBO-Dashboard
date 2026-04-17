@@ -264,6 +264,17 @@ def garantir_schema():
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_tenant ON produtos(tenant_id)"
         )
+        # Tabela de tokens ML (persiste entre deploys)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ml_tokens (
+                id TEXT PRIMARY KEY DEFAULT 'principal',
+                access_token TEXT,
+                refresh_token TEXT,
+                user_id TEXT,
+                expires_at TEXT,
+                salvo_em TEXT
+            )
+        """)
     else:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS produtos (
@@ -307,6 +318,17 @@ def garantir_schema():
                     cur.execute(f"ALTER TABLE produtos ADD COLUMN {col} {tipo}")
                 except Exception:
                     pass
+        # Tabela de tokens ML
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ml_tokens (
+                id TEXT PRIMARY KEY DEFAULT 'principal',
+                access_token TEXT,
+                refresh_token TEXT,
+                user_id TEXT,
+                expires_at TEXT,
+                salvo_em TEXT
+            )
+        """)
 
     conn.commit()
     conn.close()
