@@ -90,29 +90,20 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
         if not termo or len(termo) < 3:
             return {'ok': False, 'erro': 'Não foi possível gerar termo de busca'}
         
-        # Usa token se disponível; busca pública funciona sem token também
-        headers = {'Authorization': f'Bearer {token_ml}'} if token_ml else {}
-
-        # ── 1. Busca no ML ──────────────────────────────────────────
+        # ── 1. Busca no ML (pública por padrão, sem exigir token) ──────
+        # A API de busca pública funciona sem autenticação.
+        # Token é opcional: melhora os dados de taxa se disponível.
         resp = requests.get(
             'https://api.mercadolibre.com/sites/MLB/search',
-            headers=headers,
             params={'q': termo, 'limit': 20},
             timeout=15
         )
 
-        # Se token inválido (401/403), tenta busca pública sem token
-        if resp.status_code in (401, 403) and headers:
-            logger.warning(f"⚠️ ML: token inválido ({resp.status_code}), tentando busca pública...")
-            headers = {}
-            resp = requests.get(
-                'https://api.mercadolibre.com/sites/MLB/search',
-                params={'q': termo, 'limit': 20},
-                timeout=15
-            )
-
         if resp.status_code != 200:
             return {'ok': False, 'erro': f'Erro na API ML: {resp.status_code}'}
+
+        # Headers para endpoints que precisam de auth (taxa real)
+        headers = {'Authorization': f'Bearer {token_ml}'} if token_ml else {}
         
         data = resp.json()
         resultados = data.get('results', [])

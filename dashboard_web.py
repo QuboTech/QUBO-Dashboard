@@ -384,20 +384,38 @@ def api_pesquisar_produto():
     try:
         from agente_pesquisa import analisar_produto_ml
         from ml_buscador import MLBuscador
-        d = request.get_json(); ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(analisar_produto_ml(d.get('id'), ml.auth.access_token))
+        d = request.get_json()
+        token = None
+        try:  # token é opcional — busca pública funciona sem ele
+            ml = MLBuscador()
+            if ml.esta_autenticado():
+                token = ml.auth.access_token
+        except Exception:
+            pass
+        return jsonify(analisar_produto_ml(d.get('id'), token))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+def _get_ml_token():
+    """Retorna (token, user_id) se conectado ao ML, (None, None) se não. Nunca lança exceção."""
+    try:
+        from ml_buscador import MLBuscador
+        ml = MLBuscador()
+        if ml.esta_autenticado():
+            return ml.auth.access_token, ml.auth.user_id
+    except Exception:
+        pass
+    return None, None
+
 
 @app.route('/api/precificar', methods=['POST'])
 @login_required
 def api_precificar():
     try:
         from agente_precificacao import precificar_produto
-        from ml_buscador import MLBuscador
-        d = request.get_json(); ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(precificar_produto(d.get('id'), ml.auth.access_token,
+        d = request.get_json()
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        return jsonify(precificar_produto(d.get('id'), token,
                        float(d.get('margem_minima',20)), float(d.get('imposto_pct',0))))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
@@ -406,10 +424,10 @@ def api_precificar():
 def api_viabilidade():
     try:
         from agente_viabilidade import analisar_viabilidade
-        from ml_buscador import MLBuscador
-        d = request.get_json(); ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(analisar_viabilidade(d.get('termo',''), ml.auth.access_token,
+        d = request.get_json()
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        return jsonify(analisar_viabilidade(d.get('termo',''), token,
             float(d.get('custo',0)), float(d.get('peso',0)), float(d.get('embalagem',0)),
             float(d.get('imposto',0)), float(d.get('margem_minima',20)), d.get('id')))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
@@ -419,10 +437,9 @@ def api_viabilidade():
 def api_alerta_diario():
     try:
         from agente_alerta import gerar_alerta_diario
-        from ml_buscador import MLBuscador
-        ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(gerar_alerta_diario(ml.auth.access_token, ml.auth.user_id))
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        return jsonify(gerar_alerta_diario(token, user_id))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/tendencias')
@@ -430,10 +447,9 @@ def api_alerta_diario():
 def api_tendencias():
     try:
         from agente_tendencias import buscar_tendencias
-        from ml_buscador import MLBuscador
-        ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
-        return jsonify(buscar_tendencias(ml.auth.access_token))
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        return jsonify(buscar_tendencias(token))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/saude-anuncios')
