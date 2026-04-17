@@ -90,8 +90,9 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
         if not termo or len(termo) < 3:
             return {'ok': False, 'erro': 'Não foi possível gerar termo de busca'}
         
-        headers = {'Authorization': f'Bearer {token_ml}'}
-        
+        # Usa token se disponível; busca pública funciona sem token também
+        headers = {'Authorization': f'Bearer {token_ml}'} if token_ml else {}
+
         # ── 1. Busca no ML ──────────────────────────────────────────
         resp = requests.get(
             'https://api.mercadolibre.com/sites/MLB/search',
@@ -99,13 +100,17 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
             params={'q': termo, 'limit': 20},
             timeout=15
         )
-        
-        if resp.status_code == 401:
-            return {'ok': False, 'erro': 'Token ML expirado. Reconecte em ML Auth.'}
-        
-        if resp.status_code == 403:
-            return {'ok': False, 'erro': 'Acesso negado à API ML. Verifique permissões do app.'}
-        
+
+        # Se token inválido (401/403), tenta busca pública sem token
+        if resp.status_code in (401, 403) and headers:
+            logger.warning(f"⚠️ ML: token inválido ({resp.status_code}), tentando busca pública...")
+            headers = {}
+            resp = requests.get(
+                'https://api.mercadolibre.com/sites/MLB/search',
+                params={'q': termo, 'limit': 20},
+                timeout=15
+            )
+
         if resp.status_code != 200:
             return {'ok': False, 'erro': f'Erro na API ML: {resp.status_code}'}
         
@@ -149,10 +154,10 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
         preco_medio = sum(precos) / len(precos)
         preco_mediano = sorted(precos)[len(precos) // 2]
         
-        # ── 3. Busca taxa ML real da categoria ───────────────────────
+        # ── 3. Busca taxa ML real da categoria (só com token válido) ────
         taxa_percentual = 16.5  # Default
-        
-        if categoria_top:
+
+        if categoria_top and headers:  # só busca taxa se tem token válido
             try:
                 resp_taxa = requests.get(
                     'https://api.mercadolibre.com/sites/MLB/listing_prices',

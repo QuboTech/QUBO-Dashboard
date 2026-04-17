@@ -292,33 +292,55 @@ def api_recalcular_todos():
 @app.route('/api/buscar-ml', methods=['POST'])
 @login_required
 def api_buscar_ml():
+    """Busca preço médio no ML. A busca pública não exige token — usa token apenas para taxa real."""
     import requests as req
-    d = request.get_json(); pid = d.get('id'); termo = d.get('termo','')
+    from agente_pesquisa import limpar_termo_busca
+    d = request.get_json(); termo = d.get('termo','')
     if not termo: return jsonify({'ok': False, 'erro': 'Termo vazio'})
     try:
-        from ml_buscador import MLBuscador
-        ml = MLBuscador()
-        if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado. Vá em Configurações → ML Auth'})
-        headers = {"Authorization": f"Bearer {ml.auth.access_token}"}
+        # Token é opcional — search ML é API pública
+        headers = {}
+        try:
+            from ml_buscador import MLBuscador
+            ml = MLBuscador()
+            if ml.esta_autenticado():
+                headers = {"Authorization": f"Bearer {ml.auth.access_token}"}
+        except Exception:
+            pass
+
+        # Limpa o termo antes de buscar
+        termo_limpo = limpar_termo_busca(termo) or termo[:50]
+
         r = req.get("https://api.mercadolibre.com/sites/MLB/search",
-                   headers=headers, params={"q": termo, "limit": 10}, timeout=15)
+                   headers=headers, params={"q": termo_limpo, "limit": 10}, timeout=15)
+
+        # Se 401/403 com token, tenta sem token
+        if r.status_code in (401, 403) and headers:
+            headers = {}
+            r = req.get("https://api.mercadolibre.com/sites/MLB/search",
+                       params={"q": termo_limpo, "limit": 10}, timeout=15)
+
         if r.status_code != 200: return jsonify({'ok': False, 'erro': f'Erro ML: {r.status_code}'})
         results = r.json().get('results', [])
-        if not results: return jsonify({'ok': False, 'erro': 'Sem resultados'})
+        if not results: return jsonify({'ok': False, 'erro': f'Sem resultados para "{termo_limpo}"'})
         precos = [x.get('price',0) for x in results if x.get('price',0) > 0]
         preco_medio = round(sum(precos)/len(precos), 2) if precos else 0
-        # Taxa real
+        # Taxa real (só com token; sem token usa default)
         taxa_pct = 16.5
         cat = results[0].get('category_id','')
-        if cat:
-            r2 = req.get("https://api.mercadolibre.com/sites/MLB/listing_prices",
-                        headers=headers, params={"price": preco_medio, "category_id": cat, "currency_id": "BRL"}, timeout=10)
-            if r2.status_code == 200:
-                for lst in r2.json():
-                    if lst.get('listing_type_id') in ('gold_special','gold_pro'):
-                        for comp in lst.get('sale_fee_components',[]):
-                            if comp.get('type') == 'fee': taxa_pct = round(comp.get('ratio',0.165)*100, 1)
-        return jsonify({'ok': True, 'preco_medio': preco_medio, 'taxa_percentual': taxa_pct, 'total': len(results)})
+        if cat and headers:
+            try:
+                r2 = req.get("https://api.mercadolibre.com/sites/MLB/listing_prices",
+                            headers=headers, params={"price": preco_medio, "category_id": cat, "currency_id": "BRL"}, timeout=10)
+                if r2.status_code == 200:
+                    for lst in r2.json():
+                        if lst.get('listing_type_id') in ('gold_special','gold_pro'):
+                            for comp in lst.get('sale_fee_components',[]):
+                                if comp.get('type') == 'fee': taxa_pct = round(comp.get('ratio',0.165)*100, 1)
+            except Exception:
+                pass
+        return jsonify({'ok': True, 'preco_medio': preco_medio, 'taxa_percentual': taxa_pct,
+                       'total': len(results), 'termo_buscado': termo_limpo})
     except Exception as e:
         return jsonify({'ok': False, 'erro': str(e)})
 
