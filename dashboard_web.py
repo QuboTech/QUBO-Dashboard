@@ -458,8 +458,55 @@ def api_ml_status():
     try:
         from ml_buscador import MLBuscador
         ml = MLBuscador()
-        return jsonify({'ok': True, 'autenticado': ml.esta_autenticado(), 'user_id': ml.auth.user_id})
+        auth = ml.auth
+        exp_str = auth.expires_at.isoformat() if auth.expires_at else None
+        return jsonify({
+            'ok': True,
+            'autenticado': ml.esta_autenticado(),
+            'user_id': auth.user_id,
+            'tem_access_token': bool(auth.access_token),
+            'tem_refresh_token': bool(auth.refresh_token),
+            'expires_at': exp_str,
+        })
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+
+@app.route('/api/ml-debug')
+@login_required
+def api_ml_debug():
+    """Diagnóstico do estado do token ML no banco e em memória."""
+    try:
+        from db import get_conn, USAR_POSTGRES
+        conn = get_conn(); cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        cur.execute(f"SELECT id, user_id, expires_at, salvo_em, length(access_token), length(refresh_token) FROM ml_tokens WHERE id = {ph}", ('principal',))
+        row = cur.fetchone(); conn.close()
+        db_info = None
+        if row:
+            db_info = {'user_id': row[2], 'expires_at': row[3], 'salvo_em': row[4], 'len_access': row[5], 'len_refresh': row[6]}
+        from ml_buscador import MLBuscador, _carregar_token_db
+        loaded = _carregar_token_db()
+        ml = MLBuscador()
+        from datetime import datetime
+        return jsonify({
+            'ok': True,
+            'db': db_info,
+            'carregado': {
+                'tem_access': bool(loaded.get('access_token')),
+                'tem_refresh': bool(loaded.get('refresh_token')),
+                'expires_at': loaded.get('expires_at'),
+            },
+            'memoria': {
+                'autenticado': ml.esta_autenticado(),
+                'tem_access': bool(ml.auth.access_token),
+                'tem_refresh': bool(ml.auth.refresh_token),
+                'expires_at': ml.auth.expires_at.isoformat() if ml.auth.expires_at else None,
+                'agora_servidor': datetime.now().isoformat(),
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'ok': False, 'erro': str(e), 'trace': traceback.format_exc()})
 
 @app.route('/api/watcher-upload', methods=['POST'])
 def api_watcher_upload():

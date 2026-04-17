@@ -88,7 +88,13 @@ def _carregar_token_db() -> dict:
 CLIENT_ID = os.getenv("ML_CLIENT_ID", "5055987535998228")
 CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "pUQOnnKVNgnPuwutwMKXxQ2LcoLPjYpz")
 REDIRECT_URI = "https://www.google.com"
-AUTH_URL = f"https://auth.mercadolivre.com.br/authorization?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}"
+AUTH_URL = (
+    f"https://auth.mercadolivre.com.br/authorization"
+    f"?response_type=code"
+    f"&client_id={CLIENT_ID}"
+    f"&redirect_uri={REDIRECT_URI}"
+    f"&scope=offline_access+read+write"  # offline_access garante o refresh_token
+)
 
 
 class MLAuth:
@@ -152,13 +158,18 @@ class MLAuth:
     
     def _token_expirado(self):
         if not self.expires_at:
-            return True
+            # Sem data de expiração: assume válido e deixa a API decidir (401 se expirado)
+            return False
         return datetime.now() >= self.expires_at
-    
+
     def esta_autenticado(self):
         if not self.access_token:
             return False
         if self._token_expirado():
+            if not self.refresh_token:
+                # Sem refresh_token: token expirou mas não dá pra renovar → pede novo login
+                logger.warning("⚠️ ML: Token expirado e sem refresh_token. Reconecte em ML Auth.")
+                return False
             return self._renovar_token()
         return True
     
@@ -207,18 +218,23 @@ class MLAuth:
             )
             if response.status_code == 200:
                 self._salvar_token(response.json())
-                logger.info("✅ ML: Token renovado")
+                logger.info("✅ ML: Token renovado com sucesso")
                 return True
             else:
-                logger.warning(f"⚠️ ML: Falha ao renovar ({response.status_code})")
-                self.access_token = None
+                body = response.text[:200] if response.text else ''
+                logger.warning(f"⚠️ ML: Falha ao renovar ({response.status_code}): {body}")
+                # NÃO apaga o access_token — ele pode ainda ser válido (ex: refresh_token inválido)
+                # Só marca como inválido se o servidor diz explicitamente que o access_token expirou (401)
+                if response.status_code == 401:
+                    self.access_token = None
+                self.refresh_token = None  # refresh_token inválido, descarta
                 return False
         except Exception as e:
             logger.error(f"❌ ML: Erro ao renovar: {e}")
             return False
-    
+
     def get_headers(self):
-        if self._token_expirado():
+        if self._token_expirado() and self.refresh_token:
             self._renovar_token()
         return {'Authorization': f'Bearer {self.access_token}', 'Accept': 'application/json'}
 
