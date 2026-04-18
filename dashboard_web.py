@@ -580,6 +580,155 @@ def api_faturamento():
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 # ════════════════════════════════════════════════════════════════════
+# CRIAR / EDITAR ANÚNCIOS
+# ════════════════════════════════════════════════════════════════════
+@app.route('/api/prever-categoria', methods=['POST'])
+@login_required
+def api_prever_categoria():
+    try:
+        from agente_criar_anuncio import prever_categoria
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        return jsonify(prever_categoria(token or '', d.get('titulo', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/atributos-categoria', methods=['POST'])
+@login_required
+def api_atributos_categoria():
+    try:
+        from agente_criar_anuncio import obter_atributos_categoria
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        return jsonify(obter_atributos_categoria(token or '', d.get('category_id', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/validar-anuncio', methods=['POST'])
+@login_required
+def api_validar_anuncio():
+    try:
+        from agente_criar_anuncio import validar_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(validar_anuncio(token, d))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/criar-anuncio', methods=['POST'])
+@login_required
+def api_criar_anuncio():
+    try:
+        from agente_criar_anuncio import criar_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(criar_anuncio(token, d))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/editar-anuncio', methods=['POST'])
+@login_required
+def api_editar_anuncio():
+    try:
+        from agente_criar_anuncio import editar_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(editar_anuncio(token, d.get('item_id', ''), d.get('alteracoes', {})))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/publicar-produto', methods=['POST'])
+@login_required
+def api_publicar_produto():
+    """Atalho: cria anúncio a partir de produto do catálogo QUBO."""
+    try:
+        from agente_criar_anuncio import criar_a_partir_de_produto
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(criar_a_partir_de_produto(
+            token, int(d.get('id', 0)),
+            preco=float(d.get('preco', 0)) or None,
+            quantidade=int(d.get('quantidade', 1)),
+            imagens=d.get('imagens', []),
+            tipo=d.get('tipo', 'gold_special')
+        ))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+# ════════════════════════════════════════════════════════════════════
+# MÉTRICAS (Visitas e Conversão)
+# ════════════════════════════════════════════════════════════════════
+@app.route('/api/metricas')
+@login_required
+def api_metricas():
+    try:
+        from agente_metricas import analise_completa
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        dias = int(request.args.get('dias', 30))
+        limite = int(request.args.get('limite', 30))
+        return jsonify(analise_completa(token, user_id, dias, limite))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+# ════════════════════════════════════════════════════════════════════
+# PRICE TO WIN / BENCHMARKS
+# ════════════════════════════════════════════════════════════════════
+@app.route('/api/price-to-win', methods=['POST'])
+@login_required
+def api_price_to_win():
+    try:
+        from agente_price_win import price_to_win
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(price_to_win(token, d.get('item_id', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/benchmark')
+@login_required
+def api_benchmark():
+    try:
+        from agente_price_win import benchmark_vendedor
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        limite = int(request.args.get('limite', 30))
+        return jsonify(benchmark_vendedor(token, user_id, limite))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/descontos-sugeridos')
+@login_required
+def api_descontos_sugeridos():
+    try:
+        from agente_price_win import descontos_sugeridos
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(descontos_sugeridos(token, user_id))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+# ════════════════════════════════════════════════════════════════════
+# WEBHOOKS — receptor de notificações ML em tempo real
+# ════════════════════════════════════════════════════════════════════
+@app.route('/webhook/ml', methods=['POST'])
+def webhook_ml():
+    """Endpoint público — ML envia notificações aqui. NÃO exige login."""
+    try:
+        from webhook_handler import processar_notificacao
+        body = request.get_json(silent=True) or {}
+        result = processar_notificacao(body)
+        # ML exige resposta rápida (<500ms). Retorna 200 sempre.
+        return jsonify({'received': True}), 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return jsonify({'received': True}), 200  # sempre 200 p/ ML não retry
+
+@app.route('/api/webhooks-eventos')
+@login_required
+def api_webhooks_eventos():
+    try:
+        from webhook_handler import listar_eventos
+        topic = request.args.get('topic', '')
+        return jsonify(listar_eventos(limite=80, topic=topic))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+# ════════════════════════════════════════════════════════════════════
 # PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
 @app.route('/config')
@@ -854,6 +1003,10 @@ tr:hover td{background:#1f2544}
   <button class="btn" style="background:#134e4a;color:#fff" onclick="abrirMeusAnuncios()">📋 Anúncios</button>
   <button class="btn" style="background:#3b0764;color:#fff" onclick="abrirReputacao()">⭐ Reputação</button>
   <button class="btn" style="background:#1c1917;color:#fbbf24;border:1px solid #78350f" onclick="abrirFaturamento()">💰 Faturamento</button>
+  <button class="btn" style="background:#166534;color:#fff" onclick="abrirMetricas()">📊 Métricas</button>
+  <button class="btn" style="background:#701a75;color:#fff" onclick="abrirBenchmark()">💵 Price Win</button>
+  <button class="btn" style="background:#991b1b;color:#fff" onclick="abrirWebhooks()">🔔 Eventos</button>
+  <button class="btn" style="background:#0369a1;color:#fff" onclick="abrirCriarAnuncio()">📝 Publicar ML</button>
   <button class="btn btn-green" onclick="mostrarModalProduto()">➕ Produto</button>
   <button class="btn btn-blue" onclick="exportar()">📥 Excel</button>
   <button class="btn btn-gray" onclick="window.location='/escolhidos'">⭐ Escolhidos ({{ stats.escolhidos }})</button>
@@ -1650,6 +1803,275 @@ function mostrarModalFaturamento(d){
   </div></div>`;
   document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
   document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Métricas (Visitas e Conversão) ────────────────────────────────
+function abrirMetricas(dias=30){
+  showToast('📊 Carregando métricas...');
+  fetch(`/api/metricas?dias=${dias}`).then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalMetricas(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalMetricas(d){
+  const fmt1=v=>v!=null?parseFloat(v).toFixed(1).replace('.',','):'0,0';
+  const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+  const rowAn=(a)=>`<tr style="border-bottom:1px solid #1a1f3a">
+    <td style="padding:3px 5px">${a.thumbnail?`<img src="${a.thumbnail}" style="width:24px;height:24px;object-fit:cover;border-radius:3px">`:''}</td>
+    <td style="padding:3px 7px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem" title="${a.titulo}">${a.titulo}</td>
+    <td style="padding:3px 7px;color:#60a5fa;text-align:right;font-weight:700">${a.visitas}</td>
+    <td style="padding:3px 7px;color:#fbbf24;text-align:right">${a.vendas_total}</td>
+    <td style="padding:3px 7px;color:${a.conversao_pct>=3?'#4ade80':a.conversao_pct>=1?'#fbbf24':'#f87171'};text-align:right;font-weight:700">${fmt1(a.conversao_pct)}%</td>
+    <td style="padding:3px 7px;color:#4ade80;text-align:right">R$ ${fmt2(a.preco)}</td>
+    <td><a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem">↗</a></td>
+  </tr>`;
+
+  const renderBlocoLista=(titulo,lista,cor,emoji,vazio)=>{
+    if(!lista||!lista.length)return`<div style="color:#8b92a5;text-align:center;padding:10px;font-size:.78rem">${vazio}</div>`;
+    return `<div style="margin-bottom:14px"><div style="color:${cor};font-weight:700;font-size:.8rem;margin-bottom:6px">${emoji} ${titulo} (${lista.length})</div>
+      <div style="max-height:180px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.75rem">
+      <thead><tr style="border-bottom:1px solid #2d3452"><th style="width:30px"></th><th style="padding:3px 5px;color:#8b92a5;text-align:left">Anúncio</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Visitas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Vendas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Conv.</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Preço</th><th></th></tr></thead>
+      <tbody>${lista.map(rowAn).join('')}</tbody></table></div></div>`;
+  };
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #166534;width:920px;max-height:90vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#4ade80">📊 Métricas de Visitas e Conversão</h3>
+      <div style="color:#8b92a5;font-size:.72rem">Últimos ${d.periodo_dias} dias · ${d.gerado_em}</div></div>
+      <div style="display:flex;gap:6px">
+        <select id="met-dias" style="background:#1a1f3a;border:1px solid #2d3452;color:#e4e6eb;padding:4px 8px;border-radius:4px;font-size:.78rem">
+          <option value="7">7 dias</option><option value="15">15 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option>
+        </select>
+        <button class="btn btn-green" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirMetricas(document.getElementById('met-dias').value)">Atualizar</button>
+        <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px">
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Total Visitas</div><div style="font-size:1.3rem;font-weight:700;color:#60a5fa">${(d.total_visitas_vendedor||0).toLocaleString('pt-BR')}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Média/Dia</div><div style="font-size:1.3rem;font-weight:700;color:#c084fc">${fmt1(d.media_diaria)}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Vendas</div><div style="font-size:1.3rem;font-weight:700;color:#4ade80">${d.total_vendas_periodo||0}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Conv. Média</div><div style="font-size:1.3rem;font-weight:700;color:#fbbf24">${fmt1(d.conversao_media_pct)}%</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Analisados</div><div style="font-size:1.3rem;font-weight:700;color:#8b92a5">${d.total_anuncios_analisados||0}</div></div>
+    </div>
+    ${renderBlocoLista('Top Visitados',d.top_anuncios,'#4ade80','🏆','Sem dados.')}
+    ${renderBlocoLista('Visitados sem vender (problema de preço/ficha)',d.baixa_conversao,'#fbbf24','⚠️','Nenhum anúncio com baixa conversão.')}
+    ${renderBlocoLista('Sem Visitas — Revisar SEO/categoria',d.sem_visitas,'#f87171','👻','Todos os anúncios têm visitas!')}
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Benchmark / Price to Win ──────────────────────────────────────
+function abrirBenchmark(){
+  showToast('💵 Analisando preços vs concorrência... (demora ~15s)');
+  fetch('/api/benchmark?limite=30').then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalBenchmark(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalBenchmark(d){
+  const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+  const rows=(d.analise||[]).map(a=>{
+    const diffStr=(a.diff_pct>0?'+':'')+a.diff_pct.toFixed(1).replace('.',',')+'%';
+    return `<tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:4px 7px;font-size:1rem;text-align:center">${a.icone}</td>
+      <td style="padding:4px 7px;color:#e4e6eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem" title="${a.titulo}">${a.titulo}</td>
+      <td style="padding:4px 7px;color:#e4e6eb;text-align:right">R$ ${fmt2(a.preco_atual)}</td>
+      <td style="padding:4px 7px;color:#4ade80;text-align:right;font-weight:700">R$ ${fmt2(a.preco_sugerido)}</td>
+      <td style="padding:4px 7px;color:${a.cor};text-align:right;font-weight:700">${diffStr}</td>
+      <td style="padding:4px 7px;color:${a.cor};font-size:.72rem">${a.acao}</td>
+      <td style="padding:4px 7px;color:#fbbf24;text-align:right">${a.vendas}</td>
+      <td style="padding:4px 4px;white-space:nowrap">
+        <button onclick="aplicarPrecoMl('${a.id}',${a.preco_sugerido},this)" style="background:#065f46;border:none;color:#4ade80;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:.7rem">Aplicar</button>
+        <a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem;margin-left:4px">↗</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #701a75;width:1000px;max-height:85vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#e879f9">💵 Benchmark de Preços — Price to Win</h3>
+      <div style="color:#8b92a5;font-size:.72rem">Preço oficial sugerido pelo ML para ganhar Buy Box · ${d.gerado_em}</div></div>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Analisados</div><div style="font-size:1.3rem;font-weight:700;color:#c084fc">${d.total_analisados||0}</div></div>
+      <div style="background:#450a0a;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">🔴 Caros</div><div style="font-size:1.3rem;font-weight:700;color:#f87171">${d.caros||0}</div></div>
+      <div style="background:#3b2700;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">🟡 Baratos</div><div style="font-size:1.3rem;font-weight:700;color:#fbbf24">${d.baratos||0}</div></div>
+      <div style="background:#064e3b;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">✅ OK</div><div style="font-size:1.3rem;font-weight:700;color:#4ade80">${d.competitivos||0}</div></div>
+    </div>
+    <div style="overflow-y:auto;max-height:500px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th></th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Anúncio</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Seu Preço</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Preço Win</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Dif.</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Recomendação</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Vendas</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" style="padding:20px;text-align:center;color:#8b92a5">Nenhum dado de benchmark disponível.</td></tr>'}</tbody>
+    </table></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function aplicarPrecoMl(itemId, novoPreco, btn){
+  if(!confirm(`Alterar preço do anúncio para R$ ${novoPreco.toFixed(2).replace('.',',')}?`)) return;
+  btn.disabled=true; btn.textContent='⏳';
+  fetch('/api/editar-anuncio',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({item_id:itemId,alteracoes:{preco:novoPreco}})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){ btn.textContent='✅'; btn.style.background='#064e3b'; showToast('✅ Preço atualizado!'); }
+    else { btn.disabled=false; btn.textContent='Aplicar'; showToast('❌ '+d.erro,true); }
+  }).catch(()=>{btn.disabled=false;btn.textContent='Aplicar';showToast('❌ Erro',true);});
+}
+
+// ── Eventos Webhook ──────────────────────────────────────────────
+function abrirWebhooks(topic=''){
+  showToast('🔔 Carregando eventos...');
+  fetch(`/api/webhooks-eventos?topic=${topic}`).then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalWebhooks(d,topic);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalWebhooks(d, topicAtual){
+  const rows=(d.eventos||[]).map(e=>`<tr style="border-bottom:1px solid #1a1f3a">
+    <td style="padding:4px 7px;color:${e.cor}">${e.icone} ${e.label}</td>
+    <td style="padding:4px 7px;color:#8b92a5;font-size:.72rem;white-space:nowrap">${e.data}</td>
+    <td style="padding:4px 7px;color:#e4e6eb;font-family:monospace;font-size:.72rem">${e.resource}</td>
+    <td style="padding:4px 7px">${e.link?`<a href="${e.link}" target="_blank" style="color:#667eea;font-size:.75rem">↗</a>`:''}</td>
+  </tr>`).join('');
+
+  const statsKeys=Object.keys(d.stats||{});
+  const filtros=`<button class="btn btn-gray" style="font-size:.7rem;padding:3px 7px" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirWebhooks('')">Todos</button>` +
+    statsKeys.map(k=>{const cnt=d.stats[k];const ativo=k===topicAtual?'background:#991b1b':'';return `<button class="btn btn-gray" style="font-size:.7rem;padding:3px 7px;${ativo}" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirWebhooks('${k}')">${k} (${cnt})</button>`}).join('');
+
+  const webhookUrl = window.location.origin + '/webhook/ml';
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #991b1b;width:900px;max-height:88vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#fca5a5">🔔 Eventos em Tempo Real (Webhooks ML)</h3>
+      <div style="color:#8b92a5;font-size:.72rem">Último evento: ${d.ultimo_evento||'nenhum'} · Total: ${d.total||0}</div></div>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <div style="background:#0a0e27;border:1px dashed #2d3452;border-radius:6px;padding:10px;margin-bottom:12px;font-size:.75rem">
+      <div style="color:#fbbf24;font-weight:700;margin-bottom:4px">⚙️ Configure no painel ML:</div>
+      <div style="color:#8b92a5">URL de Notificações:
+        <input readonly value="${webhookUrl}" onclick="this.select()" style="background:#1a1f3a;border:1px solid #2d3452;color:#93c5fd;padding:3px 6px;border-radius:3px;width:60%;font-family:monospace;font-size:.72rem">
+      </div>
+      <div style="color:#8b92a5;margin-top:4px">Tópicos recomendados: <code style="color:#c084fc">orders_v2, items, questions, messages, shipments</code></div>
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">${filtros}</div>
+    <div style="overflow-y:auto;max-height:440px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Tópico</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Recebido</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Recurso</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="4" style="padding:30px;text-align:center;color:#8b92a5">Nenhum evento. Configure o webhook no painel ML e aguarde.</td></tr>'}</tbody>
+    </table></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Criar Anúncio (publicar produto do catálogo no ML) ────────────
+function abrirCriarAnuncio(){
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #0369a1;width:680px" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h3 style="color:#38bdf8">📝 Publicar Anúncio no ML</h3>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <p style="color:#8b92a5;font-size:.8rem;margin-bottom:12px">Publica um produto do seu catálogo diretamente no Mercado Livre. A categoria é sugerida automaticamente pelo título.</p>
+    <label style="color:#8b92a5;font-size:.7rem;text-transform:uppercase">Título (máx 60 chars)</label>
+    <input id="ca-titulo" maxlength="60" placeholder="Ex: Tênis Nike Air Max 90 Preto Original" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px;margin-bottom:10px;font-size:.85rem">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+      <div><label style="color:#8b92a5;font-size:.7rem">Preço (R$)</label><input id="ca-preco" type="number" step="0.01" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px"></div>
+      <div><label style="color:#8b92a5;font-size:.7rem">Estoque</label><input id="ca-qtd" type="number" value="1" min="1" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px"></div>
+      <div><label style="color:#8b92a5;font-size:.7rem">Tipo</label>
+        <select id="ca-tipo" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px">
+          <option value="gold_special">Clássico</option><option value="gold_pro">Premium</option>
+        </select></div>
+    </div>
+    <label style="color:#8b92a5;font-size:.7rem;text-transform:uppercase">Imagens (URLs, 1 por linha — mín 1, máx 12)</label>
+    <textarea id="ca-imgs" rows="3" placeholder="https://exemplo.com/foto1.jpg" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px;margin-bottom:10px;font-size:.8rem;font-family:monospace"></textarea>
+    <label style="color:#8b92a5;font-size:.7rem;text-transform:uppercase">Descrição</label>
+    <textarea id="ca-desc" rows="4" placeholder="Descreva o produto..." style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:8px 10px;border-radius:5px;margin-bottom:10px;font-size:.8rem"></textarea>
+    <div id="ca-cat-sugg" style="background:#0a0e27;border-radius:5px;padding:8px;margin-bottom:10px;font-size:.78rem;color:#8b92a5;display:none"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end">
+      <button class="btn btn-gray" onclick="preverCategoriaForm()">🔮 Sugerir Categoria</button>
+      <button class="btn btn-yellow" onclick="validarAnuncioForm()">✓ Validar</button>
+      <button class="btn btn-blue" onclick="publicarAnuncioForm()">📝 Publicar</button>
+    </div>
+    <div id="ca-result" style="margin-top:12px"></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function _caDados(){
+  return {
+    titulo: document.getElementById('ca-titulo').value.trim(),
+    preco: parseFloat(document.getElementById('ca-preco').value||0),
+    quantidade: parseInt(document.getElementById('ca-qtd').value||1),
+    tipo_anuncio: document.getElementById('ca-tipo').value,
+    imagens: document.getElementById('ca-imgs').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    descricao: document.getElementById('ca-desc').value.trim(),
+  };
+}
+
+function preverCategoriaForm(){
+  const titulo=document.getElementById('ca-titulo').value.trim();
+  if(titulo.length<4){showToast('❌ Título curto',true);return;}
+  showToast('🔮 Buscando categoria...');
+  fetch('/api/prever-categoria',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({titulo})})
+  .then(r=>r.json()).then(d=>{
+    const box=document.getElementById('ca-cat-sugg');
+    if(!d.ok){box.style.display='block';box.innerHTML='❌ '+d.erro;return;}
+    box.style.display='block';
+    const sugs=(d.sugestoes||[]).map((s,i)=>`
+      <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1a1f3a">
+        <span style="color:${i===0?'#4ade80':'#e4e6eb'}">${i===0?'⭐ ':''}${s.category_name} <span style="color:#8b92a5">(${s.category_id})</span></span>
+        <span style="color:#8b92a5;font-size:.7rem">${s.domain_name}</span>
+      </div>`).join('');
+    box.innerHTML=`<div style="color:#4ade80;font-weight:700;margin-bottom:4px">✅ Categoria sugerida: <code>${d.top_category_id}</code> — ${d.top_category_name}</div>${sugs}`;
+    window._caCategoriaId=d.top_category_id;
+    showToast('✅ Categoria: '+d.top_category_name);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function validarAnuncioForm(){
+  if(!window._caCategoriaId){showToast('❌ Sugira a categoria antes',true);return;}
+  const dados=_caDados(); dados.category_id=window._caCategoriaId;
+  if(!dados.titulo||!dados.preco||!dados.imagens.length){showToast('❌ Título, preço e imagem obrigatórios',true);return;}
+  showToast('✓ Validando...');
+  const payload={title:dados.titulo,category_id:dados.category_id,price:dados.preco,currency_id:'BRL',available_quantity:dados.quantidade,buying_mode:'buy_it_now',listing_type_id:dados.tipo_anuncio,condition:'new',pictures:dados.imagens.map(u=>({source:u}))};
+  fetch('/api/validar-anuncio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+  .then(r=>r.json()).then(d=>{
+    const res=document.getElementById('ca-result');
+    if(d.ok){res.innerHTML=`<div style="background:#064e3b;color:#4ade80;padding:8px;border-radius:5px">✅ ${d.msg}</div>`;}
+    else{res.innerHTML=`<div style="background:#450a0a;color:#f87171;padding:8px;border-radius:5px">❌ ${d.erro}</div>`;}
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function publicarAnuncioForm(){
+  if(!window._caCategoriaId){showToast('❌ Sugira a categoria antes',true);return;}
+  const dados=_caDados(); dados.category_id=window._caCategoriaId;
+  if(!dados.titulo||!dados.preco||!dados.imagens.length){showToast('❌ Campos obrigatórios faltando',true);return;}
+  if(!confirm(`Publicar "${dados.titulo}" por R$ ${dados.preco.toFixed(2).replace('.',',')}?`)) return;
+  showToast('📝 Publicando...');
+  fetch('/api/criar-anuncio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dados)})
+  .then(r=>r.json()).then(d=>{
+    const res=document.getElementById('ca-result');
+    if(d.ok){res.innerHTML=`<div style="background:#064e3b;color:#4ade80;padding:10px;border-radius:5px">✅ ${d.msg} · <a href="${d.link}" target="_blank" style="color:#60a5fa">Ver anúncio →</a></div>`;showToast('✅ Publicado!');}
+    else{res.innerHTML=`<div style="background:#450a0a;color:#f87171;padding:10px;border-radius:5px">❌ ${d.erro}</div>`;}
+  }).catch(()=>showToast('❌ Erro',true));
 }
 
 // Atalho Enter no filtro
