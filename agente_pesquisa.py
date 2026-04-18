@@ -145,43 +145,25 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
         preco_medio = sum(precos) / len(precos)
         preco_mediano = sorted(precos)[len(precos) // 2]
         
-        # ── 3. Busca taxa ML real da categoria (só com token válido) ────
-        taxa_percentual = 16.5  # Default
+        # ── 3. Busca taxa ML real da categoria ────────────────────────
+        from taxas_ml import get_taxa_ml, calcular_taxa_fixa
+        taxa_info = get_taxa_ml(
+            preco=preco_mediano,
+            descricao=descricao,
+            category_id=categoria_top,
+            token_ml=token_ml,
+            tipo_anuncio='classico'
+        )
+        taxa_percentual = taxa_info['taxa_percentual']
 
-        if categoria_top and headers:  # só busca taxa se tem token válido
-            try:
-                resp_taxa = requests.get(
-                    'https://api.mercadolibre.com/sites/MLB/listing_prices',
-                    headers=headers,
-                    params={
-                        'price': preco_mediano,
-                        'category_id': categoria_top,
-                        'currency_id': 'BRL'
-                    },
-                    timeout=10
-                )
-                
-                if resp_taxa.status_code == 200:
-                    taxa_data = resp_taxa.json()
-                    # Extrai taxa do tipo "gold_special" (clássico) ou "gold_pro" (premium)
-                    for listing in taxa_data:
-                        if listing.get('listing_type_id') in ('gold_special', 'gold_pro'):
-                            for comp in listing.get('sale_fee_components', []):
-                                if comp.get('type') == 'fee':
-                                    taxa_percentual = comp.get('ratio', 0.165) * 100
-                                    break
-                            break
-            except Exception:
-                pass  # Mantém taxa default
-        
         # ── 4. Calcula margem e sugestão de preço ───────────────────
         taxa_decimal = taxa_percentual / 100
-        
+
         def margem_simples(custo, preco):
             """Margem sem frete (estimativa rápida)"""
             if not preco or preco <= 0:
                 return 0
-            taxa_fixa = 6.25 if preco < 79 else 0
+            taxa_fixa = calcular_taxa_fixa(preco, descricao)
             custo_ml = preco * taxa_decimal + taxa_fixa
             lucro = preco - custo - custo_ml
             return round((lucro / preco) * 100, 1)
@@ -230,6 +212,7 @@ def analisar_produto_ml(produto_id: int, token_ml: str, custo_produto: float = 0
             
             # Taxa
             'taxa_percentual': round(taxa_percentual, 1),
+            'taxa_fonte': taxa_info.get('fonte', 'default'),
             'categoria_id': categoria_top,
             
             # Margens (se custo informado)

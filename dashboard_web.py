@@ -407,15 +407,31 @@ def _get_ml_token():
     return None, None
 
 
+@app.route('/api/sugerir-taxa', methods=['POST'])
+@login_required
+def api_sugerir_taxa():
+    """Sugere taxa ML correta por categoria/descrição. Token melhora precisão mas é opcional."""
+    try:
+        from taxas_ml import sugerir_taxa_produto
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        return jsonify(sugerir_taxa_produto(
+            descricao=d.get('descricao', ''),
+            preco=float(d.get('preco', 0)),
+            category_id=d.get('category_id', ''),
+            token_ml=token or ''
+        ))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+
 @app.route('/api/precificar', methods=['POST'])
 @login_required
 def api_precificar():
     try:
         from agente_precificacao import precificar_produto
         d = request.get_json()
-        token, _ = _get_ml_token()
-        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
-        return jsonify(precificar_produto(d.get('id'), token,
+        token, _ = _get_ml_token()  # token opcional — melhora taxa se disponível
+        return jsonify(precificar_produto(d.get('id'), token or "",
                        float(d.get('margem_minima',20)), float(d.get('imposto_pct',0))))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 

@@ -95,12 +95,13 @@ def calcular_preco_minimo(custo, taxa_pct, peso_kg=0, embalagem=0,
     if pct_total >= 1:
         return 0
 
+    from taxas_ml import calcular_taxa_fixa as _ctf
     fixos = embalagem + ads
     preco_est = (custo + fixos) / (1 - pct_total)
 
     # 2 iterações para convergir com o frete
     for _ in range(2):
-        taxa_fixa = 6.25 if preco_est < 79 else 0
+        taxa_fixa = _ctf(preco_est)
         frete = calcular_frete(preco_est, peso_kg)
         preco_est = (custo + fixos + frete + taxa_fixa) / (1 - pct_total)
 
@@ -112,16 +113,17 @@ def calcular_margem(custo, preco, taxa_pct, peso_kg=0, embalagem=0,
     """Calcula margem real para um preço dado."""
     if not preco or preco <= 0:
         return 0
+    from taxas_ml import calcular_taxa_fixa as _ctf
     taxa = taxa_pct / 100
     imp = imposto_pct / 100
-    taxa_fixa = 6.25 if preco < 79 else 0
+    taxa_fixa = _ctf(preco)
     frete = calcular_frete(preco, peso_kg)
     custos = custo + preco * taxa + taxa_fixa + preco * imp + embalagem + frete + ads
     margem = (preco - custos) / preco * 100
     return round(margem, 1)
 
 
-def precificar_produto(produto_id: int, token_ml: str,
+def precificar_produto(produto_id: int, token_ml: str = "",
                         margem_minima: float = 20.0,
                         imposto_pct: float = 0.0) -> dict:
     """
@@ -137,17 +139,15 @@ def precificar_produto(produto_id: int, token_ml: str,
 
     try:
         conn, is_pg = get_conn()
-        if is_pg:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM produtos WHERE id = %s", (produto_id,))
+        cur = conn.cursor()
+        ph = "%s" if is_pg else "?"
+        cur.execute(f"SELECT * FROM produtos WHERE id = {ph}", (produto_id,))
+        row = cur.fetchone()
+        if row:
             cols = [d[0] for d in cur.description]
-            row = cur.fetchone()
-            produto = dict(zip(cols, row)) if row else {}
+            produto = dict(zip(cols, row))
         else:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM produtos WHERE id = ?", (produto_id,))
-            row = cur.fetchone()
-            produto = dict(row) if row else {}
+            produto = {}
         conn.close()
 
         if not produto:
@@ -164,20 +164,13 @@ def precificar_produto(produto_id: int, token_ml: str,
         if not termo:
             return {"ok": False, "erro": "Não foi possível gerar termo de busca"}
 
-        headers = {"Authorization": f"Bearer {token_ml}"}
-
-        # ── Busca ML ─────────────────────────────────────────────────
+        # ── Busca ML (pública, sem exigir token) ─────────────────────
         resp = requests.get(
             "https://api.mercadolibre.com/sites/MLB/search",
-            headers=headers,
             params={"q": termo, "limit": 20},
             timeout=15
         )
 
-        if resp.status_code == 401:
-            return {"ok": False, "erro": "Token ML expirado. Reconecte em ML Auth."}
-        if resp.status_code == 403:
-            return {"ok": False, "erro": "Acesso negado à API ML."}
         if resp.status_code != 200:
             return {"ok": False, "erro": f"Erro API ML: {resp.status_code}"}
 
@@ -195,28 +188,16 @@ def precificar_produto(produto_id: int, token_ml: str,
         preco_max_ml = precos[-1]
 
         # ── Taxa ML real ──────────────────────────────────────────────
+        from taxas_ml import get_taxa_ml as _get_taxa_ml, calcular_taxa_fixa as _taxa_fixa
         categoria = resultados[0].get("category_id", "")
-        taxa_pct = 16.5  # default
-
-        if categoria:
-            try:
-                r2 = requests.get(
-                    "https://api.mercadolibre.com/sites/MLB/listing_prices",
-                    headers=headers,
-                    params={"price": preco_mediano, "category_id": categoria,
-                            "currency_id": "BRL"},
-                    timeout=10
-                )
-                if r2.status_code == 200:
-                    for listing in r2.json():
-                        if listing.get("listing_type_id") in ("gold_special", "gold_pro"):
-                            for comp in listing.get("sale_fee_components", []):
-                                if comp.get("type") == "fee":
-                                    taxa_pct = round(comp.get("ratio", 0.165) * 100, 1)
-                                    break
-                            break
-            except Exception:
-                pass
+        taxa_info = _get_taxa_ml(
+            preco=preco_mediano,
+            descricao=descricao,
+            category_id=categoria,
+            token_ml=token_ml or "",
+            tipo_anuncio="classico"
+        )
+        taxa_pct = taxa_info["taxa_percentual"]
 
         # ── Cálculo de cenários ───────────────────────────────────────
         preco_minimo_viavel = calcular_preco_minimo(
@@ -268,6 +249,7 @@ def precificar_produto(produto_id: int, token_ml: str,
             "preco_medio": preco_medio,
             "preco_max_ml": round(preco_max_ml, 2),
             "taxa_percentual": taxa_pct,
+            "taxa_fonte": taxa_info.get("fonte", "default"),
             "categoria_id": categoria,
 
             # Viabilidade
