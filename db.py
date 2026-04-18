@@ -264,7 +264,7 @@ def garantir_schema():
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_tenant ON produtos(tenant_id)"
         )
-        # Tabela de tokens ML (persiste entre deploys)
+        # Tabela de tokens ML (persiste entre deploys) — 1 row por tenant
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ml_tokens (
                 id TEXT PRIMARY KEY DEFAULT 'principal',
@@ -272,9 +272,60 @@ def garantir_schema():
                 refresh_token TEXT,
                 user_id TEXT,
                 expires_at TEXT,
-                salvo_em TEXT
+                salvo_em TEXT,
+                tenant_id TEXT DEFAULT 'qubo'
             )
         """)
+        # Adiciona tenant_id se não existir (upgrade)
+        try:
+            cur.execute("ALTER TABLE ml_tokens ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'qubo'")
+        except Exception: pass
+        # Migração: row 'principal' legado vira 'qubo' (se ainda não existir 'qubo')
+        try:
+            cur.execute("UPDATE ml_tokens SET id='qubo', tenant_id='qubo' WHERE id='principal' AND NOT EXISTS (SELECT 1 FROM ml_tokens WHERE id='qubo')")
+        except Exception: pass
+
+        # ═══════════════════════════════════════════════════════════════
+        # MULTI-TENANT: tabelas tenants + usuarios
+        # ═══════════════════════════════════════════════════════════════
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tenants (
+                id SERIAL PRIMARY KEY,
+                slug TEXT UNIQUE NOT NULL,
+                nome_empresa TEXT NOT NULL,
+                email_admin TEXT,
+                plano TEXT DEFAULT 'free',
+                ativo INTEGER DEFAULT 1,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+                cor_primaria TEXT DEFAULT '#667eea'
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                senha_hash TEXT NOT NULL,
+                nome TEXT,
+                role TEXT DEFAULT 'admin',
+                ativo INTEGER DEFAULT 1,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_usuario_tenant ON usuarios(tenant_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_usuario_email ON usuarios(email)")
+
+        # Seed: Qubo como primeiro tenant (id=1)
+        cur.execute("""
+            INSERT INTO tenants (slug, nome_empresa, email_admin, plano)
+            VALUES ('qubo', 'Qubo', 'gustavo@qubo.com.br', 'enterprise')
+            ON CONFLICT (slug) DO NOTHING
+        """)
+
+        # Config — adiciona tenant_id
+        try:
+            cur.execute("ALTER TABLE config ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'qubo'")
+        except Exception: pass
     else:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS produtos (

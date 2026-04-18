@@ -39,13 +39,16 @@ BENCHMARK_REAIS_POR_VISITA = 10.0
 # SCHEMA
 # ─────────────────────────────────────────────────────────────────────────────
 def garantir_tabelas():
-    """Cria ml_watchlist_itens e ml_snapshots_itens se não existirem."""
+    """Cria ml_watchlist_itens e ml_snapshots_itens se não existirem (multi-tenant)."""
     try:
         conn = get_conn(); cur = conn.cursor()
         if USAR_POSTGRES:
+            # Tabela nova já com tenant_id
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_watchlist_itens (
-                    item_id TEXT PRIMARY KEY,
+                    id SERIAL PRIMARY KEY,
+                    tenant_id TEXT DEFAULT 'qubo',
+                    item_id TEXT NOT NULL,
                     apelido TEXT,
                     titulo TEXT,
                     seller_id TEXT,
@@ -53,9 +56,21 @@ def garantir_tabelas():
                     ativo INTEGER DEFAULT 1
                 )
             """)
+            # Upgrade de schema existente
+            try: cur.execute("ALTER TABLE ml_watchlist_itens ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'qubo'")
+            except Exception: pass
+            try: cur.execute("ALTER TABLE ml_watchlist_itens ADD COLUMN IF NOT EXISTS id SERIAL")
+            except Exception: pass
+            # Tenta remover PK antigo (item_id) e recriar em composite unique
+            try: cur.execute("ALTER TABLE ml_watchlist_itens DROP CONSTRAINT IF EXISTS ml_watchlist_itens_pkey")
+            except Exception: pass
+            try: cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_tenant_item ON ml_watchlist_itens(tenant_id, item_id)")
+            except Exception: pass
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_snapshots_itens (
                     id SERIAL PRIMARY KEY,
+                    tenant_id TEXT DEFAULT 'qubo',
                     item_id TEXT,
                     ts BIGINT,
                     data TEXT,
@@ -67,24 +82,30 @@ def garantir_tabelas():
                     extra TEXT
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_snap_item_ts ON ml_snapshots_itens(item_id, ts)")
+            try: cur.execute("ALTER TABLE ml_snapshots_itens ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'qubo'")
+            except Exception: pass
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_snap_tenant_item_ts ON ml_snapshots_itens(tenant_id, item_id, ts)")
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_watchlist_itens (
-                    item_id TEXT PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT DEFAULT 'qubo',
+                    item_id TEXT NOT NULL,
                     apelido TEXT, titulo TEXT, seller_id TEXT,
                     added_ts INTEGER, ativo INTEGER DEFAULT 1
                 )
             """)
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_tenant_item ON ml_watchlist_itens(tenant_id, item_id)")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_snapshots_itens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT DEFAULT 'qubo',
                     item_id TEXT, ts INTEGER, data TEXT,
                     sold_quantity INTEGER, available_quantity INTEGER,
                     price REAL, status TEXT, seller_id TEXT, extra TEXT
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_snap_item_ts ON ml_snapshots_itens(item_id, ts)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_snap_tenant_item_ts ON ml_snapshots_itens(tenant_id, item_id, ts)")
         conn.commit(); conn.close()
     except Exception as e:
         logger.warning(f"⚠️ Falha ao criar tabelas espião: {e}")
@@ -122,7 +143,7 @@ def _headers(token: str = '') -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # SPY — detalhes de um anúncio + snapshot automático
 # ─────────────────────────────────────────────────────────────────────────────
-def spy_anuncio(item_id_ou_url: str, token: str = '') -> dict:
+def spy_anuncio(item_id_ou_url: str, token: str = '', tenant_id: str = 'qubo') -> dict:
     """Consulta anúncio público + registra snapshot automaticamente."""
     item_id = _extrair_mlb_id(item_id_ou_url)
     if not item_id:
@@ -190,17 +211,17 @@ def spy_anuncio(item_id_ou_url: str, token: str = '') -> dict:
                 pass
 
         # ── Snapshot automático ─────────────────────────────────────────
-        _salvar_snapshot(item_id, sold, estoque, preco, status, seller_id)
+        _salvar_snapshot(item_id, sold, estoque, preco, status, seller_id, tenant_id)
 
         # ── Delta (se já estava sendo monitorado) ───────────────────────
-        delta = _calcular_delta(item_id, sold, preco, dias=7)
+        delta = _calcular_delta(item_id, sold, preco, dias=7, tenant_id=tenant_id)
 
         # ── Receita estimada ────────────────────────────────────────────
         receita_acum = round(sold * preco, 2)
         receita_7d = round((delta.get('vendas_7d', 0) or 0) * preco, 2) if delta.get('tem_historico') else None
 
         # ── Watchlist check ─────────────────────────────────────────────
-        monitorado = _esta_monitorado(item_id)
+        monitorado = _esta_monitorado(item_id, tenant_id)
 
         return {
             'ok': True,
@@ -232,8 +253,8 @@ def spy_anuncio(item_id_ou_url: str, token: str = '') -> dict:
 # SNAPSHOTS + DELTAS
 # ─────────────────────────────────────────────────────────────────────────────
 def _salvar_snapshot(item_id: str, sold: int, estoque: int, preco: float,
-                     status: str, seller_id: str):
-    """Registra um ponto histórico (máx 1 por dia por item)."""
+                     status: str, seller_id: str, tenant_id: str = 'qubo'):
+    """Registra um ponto histórico (máx 1 por dia por item, por tenant)."""
     try:
         garantir_tabelas()
         ts = int(datetime.utcnow().timestamp())
@@ -241,10 +262,10 @@ def _salvar_snapshot(item_id: str, sold: int, estoque: int, preco: float,
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
 
-        # Evita duplicar snapshot no mesmo dia
+        # Evita duplicar snapshot no mesmo dia (por tenant)
         cur.execute(
-            f"SELECT id FROM ml_snapshots_itens WHERE item_id={ph} AND data={ph}",
-            (item_id, data)
+            f"SELECT id FROM ml_snapshots_itens WHERE tenant_id={ph} AND item_id={ph} AND data={ph}",
+            (tenant_id, item_id, data)
         )
         existe = cur.fetchone()
         if existe:
@@ -258,15 +279,15 @@ def _salvar_snapshot(item_id: str, sold: int, estoque: int, preco: float,
         else:
             cur.execute(f"""
                 INSERT INTO ml_snapshots_itens
-                (item_id, ts, data, sold_quantity, available_quantity, price, status, seller_id, extra)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
-            """, (item_id, ts, data, sold, estoque, preco, status, seller_id, ''))
+                (tenant_id, item_id, ts, data, sold_quantity, available_quantity, price, status, seller_id, extra)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
+            """, (tenant_id, item_id, ts, data, sold, estoque, preco, status, seller_id, ''))
         conn.commit(); conn.close()
     except Exception as e:
         logger.warning(f"⚠️ snapshot falhou ({item_id}): {e}")
 
 
-def _calcular_delta(item_id: str, sold_agora: int, preco_agora: float, dias: int = 7) -> dict:
+def _calcular_delta(item_id: str, sold_agora: int, preco_agora: float, dias: int = 7, tenant_id: str = 'qubo') -> dict:
     """Compara com snapshot de N dias atrás. Retorna tem_historico + deltas."""
     try:
         garantir_tabelas()
@@ -277,15 +298,15 @@ def _calcular_delta(item_id: str, sold_agora: int, preco_agora: float, dias: int
         # Snapshot mais próximo de (hoje - N dias)
         cur.execute(f"""
             SELECT sold_quantity, price, ts FROM ml_snapshots_itens
-            WHERE item_id={ph} AND ts <= {ph}
+            WHERE tenant_id={ph} AND item_id={ph} AND ts <= {ph}
             ORDER BY ts DESC LIMIT 1
-        """, (item_id, ts_alvo))
+        """, (tenant_id, item_id, ts_alvo))
         r = cur.fetchone()
 
         # Snapshot mais antigo (para gráfico)
         cur.execute(f"""
-            SELECT MIN(ts), COUNT(*) FROM ml_snapshots_itens WHERE item_id={ph}
-        """, (item_id,))
+            SELECT MIN(ts), COUNT(*) FROM ml_snapshots_itens WHERE tenant_id={ph} AND item_id={ph}
+        """, (tenant_id, item_id))
         r_min = cur.fetchone()
         total_snaps = r_min[1] if r_min else 0
         primeira_ts = r_min[0] if r_min else None
@@ -320,19 +341,19 @@ def _calcular_delta(item_id: str, sold_agora: int, preco_agora: float, dias: int
 # ─────────────────────────────────────────────────────────────────────────────
 # WATCHLIST
 # ─────────────────────────────────────────────────────────────────────────────
-def _esta_monitorado(item_id: str) -> bool:
+def _esta_monitorado(item_id: str, tenant_id: str = 'qubo') -> bool:
     try:
         garantir_tabelas()
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute(f"SELECT ativo FROM ml_watchlist_itens WHERE item_id={ph}", (item_id,))
+        cur.execute(f"SELECT ativo FROM ml_watchlist_itens WHERE tenant_id={ph} AND item_id={ph}", (tenant_id, item_id))
         r = cur.fetchone(); conn.close()
         return bool(r and r[0])
     except Exception:
         return False
 
 
-def adicionar_watch(item_id_ou_url: str, apelido: str = '', token: str = '') -> dict:
+def adicionar_watch(item_id_ou_url: str, apelido: str = '', token: str = '', tenant_id: str = 'qubo') -> dict:
     item_id = _extrair_mlb_id(item_id_ou_url)
     if not item_id:
         return {'ok': False, 'erro': 'MLB inválido'}
@@ -357,28 +378,28 @@ def adicionar_watch(item_id_ou_url: str, apelido: str = '', token: str = '') -> 
         ts = int(datetime.utcnow().timestamp())
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute(f"SELECT item_id FROM ml_watchlist_itens WHERE item_id={ph}", (item_id,))
+        cur.execute(f"SELECT id FROM ml_watchlist_itens WHERE tenant_id={ph} AND item_id={ph}", (tenant_id, item_id))
         if cur.fetchone():
-            cur.execute(f"UPDATE ml_watchlist_itens SET ativo=1, apelido={ph}, titulo={ph} WHERE item_id={ph}",
-                        (apelido, titulo, item_id))
+            cur.execute(f"UPDATE ml_watchlist_itens SET ativo=1, apelido={ph}, titulo={ph} WHERE tenant_id={ph} AND item_id={ph}",
+                        (apelido, titulo, tenant_id, item_id))
             acao = 'reativado'
         else:
             cur.execute(f"""
-                INSERT INTO ml_watchlist_itens (item_id, apelido, titulo, seller_id, added_ts, ativo)
-                VALUES ({ph},{ph},{ph},{ph},{ph},1)
-            """, (item_id, apelido, titulo, seller_id, ts))
+                INSERT INTO ml_watchlist_itens (tenant_id, item_id, apelido, titulo, seller_id, added_ts, ativo)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},1)
+            """, (tenant_id, item_id, apelido, titulo, seller_id, ts))
             acao = 'adicionado'
         conn.commit(); conn.close()
 
         # Primeiro snapshot imediato
-        spy_anuncio(item_id, token)
+        spy_anuncio(item_id, token, tenant_id)
 
         return {'ok': True, 'item_id': item_id, 'titulo': titulo, 'acao': acao}
     except Exception as e:
         return {'ok': False, 'erro': str(e)}
 
 
-def remover_watch(item_id: str) -> dict:
+def remover_watch(item_id: str, tenant_id: str = 'qubo') -> dict:
     item_id = _extrair_mlb_id(item_id)
     if not item_id:
         return {'ok': False, 'erro': 'MLB inválido'}
@@ -386,24 +407,24 @@ def remover_watch(item_id: str) -> dict:
         garantir_tabelas()
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute(f"UPDATE ml_watchlist_itens SET ativo=0 WHERE item_id={ph}", (item_id,))
+        cur.execute(f"UPDATE ml_watchlist_itens SET ativo=0 WHERE tenant_id={ph} AND item_id={ph}", (tenant_id, item_id))
         conn.commit(); conn.close()
         return {'ok': True, 'item_id': item_id}
     except Exception as e:
         return {'ok': False, 'erro': str(e)}
 
 
-def listar_watchlist(token: str = '', refresh: bool = True) -> dict:
-    """Lista itens monitorados + snapshot mais recente + deltas."""
+def listar_watchlist(token: str = '', refresh: bool = True, tenant_id: str = 'qubo') -> dict:
+    """Lista itens monitorados + snapshot mais recente + deltas (escopado por tenant)."""
     try:
         garantir_tabelas()
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute("""
+        cur.execute(f"""
             SELECT item_id, apelido, titulo, seller_id, added_ts
-            FROM ml_watchlist_itens WHERE ativo=1
+            FROM ml_watchlist_itens WHERE tenant_id={ph} AND ativo=1
             ORDER BY added_ts DESC
-        """)
+        """, (tenant_id,))
         rows = cur.fetchall()
         conn.close()
 
@@ -428,14 +449,15 @@ def listar_watchlist(token: str = '', refresh: bool = True) -> dict:
                             float(atual.get('price') or 0),
                             atual.get('status', ''),
                             seller_id,
+                            tenant_id,
                         )
                 except Exception:
                     pass
 
             sold = int(atual.get('sold_quantity') or 0)
             preco = float(atual.get('price') or 0)
-            delta7 = _calcular_delta(item_id, sold, preco, dias=7)
-            delta30 = _calcular_delta(item_id, sold, preco, dias=30)
+            delta7 = _calcular_delta(item_id, sold, preco, dias=7, tenant_id=tenant_id)
+            delta30 = _calcular_delta(item_id, sold, preco, dias=30, tenant_id=tenant_id)
 
             itens.append({
                 'item_id': item_id,
@@ -565,17 +587,23 @@ def _montar_ranking(results: list, limite: int) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 # SNAPSHOT CRON — rotina diária (pode ser chamada por scheduler externo)
 # ─────────────────────────────────────────────────────────────────────────────
-def snapshot_cron(token: str = '') -> dict:
-    """Atualiza snapshot de todos os itens da watchlist. Chamar 1×/dia."""
+def snapshot_cron(token: str = '', tenant_id: str = None) -> dict:
+    """Atualiza snapshot de todos os itens da watchlist. Chamar 1×/dia.
+    Se tenant_id=None, roda pra TODOS os tenants (modo batch global)."""
     try:
         garantir_tabelas()
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT item_id FROM ml_watchlist_itens WHERE ativo=1")
-        ids = [r[0] for r in cur.fetchall()]
+        ph = "%s" if USAR_POSTGRES else "?"
+        if tenant_id:
+            cur.execute(f"SELECT tenant_id, item_id FROM ml_watchlist_itens WHERE tenant_id={ph} AND ativo=1", (tenant_id,))
+        else:
+            cur.execute("SELECT tenant_id, item_id FROM ml_watchlist_itens WHERE ativo=1")
+        rows = cur.fetchall()
         conn.close()
+        ids = [(r[0], r[1]) for r in rows]
 
         ok = 0; erros = 0
-        for iid in ids:
+        for tid, iid in ids:
             try:
                 resp = requests.get(
                     f'https://api.mercadolibre.com/items/{iid}?attributes=sold_quantity,price,available_quantity,status,seller_id',
@@ -590,6 +618,7 @@ def snapshot_cron(token: str = '') -> dict:
                         float(j.get('price') or 0),
                         j.get('status', ''),
                         str(j.get('seller_id') or ''),
+                        tid,
                     )
                     ok += 1
                 else:

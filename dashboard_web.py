@@ -12,10 +12,13 @@ from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect
 from db import get_conn, garantir_schema, USAR_POSTGRES
-from auth import login_required, get_tenant_id, get_usuario_nome, verificar_login, LOGIN_HTML
+from auth import (login_required, admin_required, get_tenant_id, get_usuario_nome,
+                  get_tenant_nome, verificar_login, criar_tenant_e_admin,
+                  convidar_usuario, listar_usuarios_tenant, remover_usuario_tenant,
+                  get_tenant_info, LOGIN_HTML, SIGNUP_HTML)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "qubo-secret-2026")
+app.secret_key = os.getenv("SECRET_KEY", "vitrix-secret-2026")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,17 @@ def get_aliquota():
 
 def ph(): return "%s" if USAR_POSTGRES else "?"
 
+def _brand_ctx():
+    """Contexto de branding pros templates. Qubo tenant vê 'Qubo'; demais veem 'Vitrix'."""
+    tid = get_tenant_id()
+    return {
+        'brand': 'Qubo' if tid == 'qubo' else 'Vitrix',
+        'plataforma': 'Vitrix',
+        'tenant_nome': get_tenant_nome(),
+        'tenant_slug': tid,
+        'is_admin': session.get('role') == 'admin',
+    }
+
 # ════════════════════════════════════════════════════════════════════
 # AUTH
 # ════════════════════════════════════════════════════════════════════
@@ -83,21 +97,90 @@ def ph(): return "%s" if USAR_POSTGRES else "?"
 def pagina_login():
     return LOGIN_HTML
 
+@app.route('/signup')
+def pagina_signup():
+    return SIGNUP_HTML
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     d = request.get_json() or {}
     u = d.get('usuario','').strip()
     s = d.get('senha','')
-    if verificar_login(u, s):
+    user = verificar_login(u, s)
+    if user:
         session['usuario'] = u
+        session['usuario_nome'] = user.get('nome', u)
+        session['tenant_id'] = user.get('tenant_id', 'qubo')
+        session['tenant_slug'] = user.get('tenant_slug', user.get('tenant_id', 'qubo'))
+        session['tenant_nome'] = user.get('tenant_nome', 'Vitrix')
+        session['role'] = user.get('role', 'admin')
+        session['fonte_auth'] = user.get('fonte', 'env')
         session.permanent = True
         return jsonify({'ok': True})
-    return jsonify({'ok': False, 'erro': 'Usuário ou senha incorretos'})
+    return jsonify({'ok': False, 'erro': 'Email/usuário ou senha incorretos'})
+
+@app.route('/api/signup', methods=['POST'])
+def api_signup():
+    d = request.get_json() or {}
+    res = criar_tenant_e_admin(
+        nome_empresa=d.get('nome_empresa', ''),
+        email=d.get('email', ''),
+        senha=d.get('senha', ''),
+        nome_admin=d.get('nome', '')
+    )
+    if not res.get('ok'):
+        return jsonify(res)
+    # Auto-login após signup
+    session['usuario'] = d.get('email', '').strip()
+    session['usuario_nome'] = d.get('nome', '') or d.get('email', '').split('@')[0]
+    session['tenant_id'] = res['tenant_slug']
+    session['tenant_slug'] = res['tenant_slug']
+    session['tenant_nome'] = res['nome_empresa']
+    session['role'] = 'admin'
+    session['fonte_auth'] = 'db'
+    session.permanent = True
+    return jsonify({'ok': True, 'tenant_slug': res['tenant_slug']})
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect('/login')
+
+# ────── Admin de usuários do tenant ──────
+@app.route('/api/admin/usuarios')
+@admin_required
+def api_admin_usuarios():
+    tid = get_tenant_id()
+    return jsonify({'ok': True, 'usuarios': listar_usuarios_tenant(tid)})
+
+@app.route('/api/admin/convidar', methods=['POST'])
+@admin_required
+def api_admin_convidar():
+    d = request.get_json() or {}
+    tid = get_tenant_id()
+    return jsonify(convidar_usuario(
+        tenant_slug=tid,
+        email=d.get('email',''),
+        senha=d.get('senha',''),
+        nome=d.get('nome',''),
+        role=d.get('role','user')
+    ))
+
+@app.route('/api/admin/remover', methods=['POST'])
+@admin_required
+def api_admin_remover():
+    d = request.get_json() or {}
+    tid = get_tenant_id()
+    return jsonify(remover_usuario_tenant(tid, int(d.get('usuario_id', 0))))
+
+@app.route('/api/tenant-info')
+@login_required
+def api_tenant_info():
+    tid = get_tenant_id()
+    info = get_tenant_info(tid)
+    info['usuario_nome'] = get_usuario_nome()
+    info['role'] = session.get('role', 'admin')
+    return jsonify({'ok': True, **info})
 
 # ════════════════════════════════════════════════════════════════════
 # DASHBOARD PRINCIPAL
@@ -167,7 +250,8 @@ def index():
 
     return render_template_string(HTML_DASH, produtos=produtos, stats=stats,
         fornecedores=fornecedores, f=f, pg=pg, total_paginas=total_pg,
-        url_pg=url_pg, imp_pct=imp_pct, usuario=usuario, total_filtrado=total_f)
+        url_pg=url_pg, imp_pct=imp_pct, usuario=usuario, total_filtrado=total_f,
+        **_brand_ctx())
 
 # ════════════════════════════════════════════════════════════════════
 # APIS CRUD PRODUTOS
@@ -302,7 +386,7 @@ def api_buscar_ml():
         headers = {}
         try:
             from ml_buscador import MLBuscador
-            ml = MLBuscador()
+            ml = MLBuscador(tenant_id=get_tenant_id())
             if ml.esta_autenticado():
                 headers = {"Authorization": f"Bearer {ml.auth.access_token}"}
         except Exception:
@@ -387,7 +471,7 @@ def api_pesquisar_produto():
         d = request.get_json()
         token = None
         try:  # token é opcional — busca pública funciona sem ele
-            ml = MLBuscador()
+            ml = MLBuscador(tenant_id=get_tenant_id())
             if ml.esta_autenticado():
                 token = ml.auth.access_token
         except Exception:
@@ -396,10 +480,11 @@ def api_pesquisar_produto():
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 def _get_ml_token():
-    """Retorna (token, user_id) se conectado ao ML, (None, None) se não. Nunca lança exceção."""
+    """Retorna (token, user_id) do ML do TENANT ATUAL. Nunca lança."""
     try:
         from ml_buscador import MLBuscador
-        ml = MLBuscador()
+        tid = get_tenant_id()
+        ml = MLBuscador(tenant_id=tid)
         if ml.esta_autenticado():
             return ml.auth.access_token, ml.auth.user_id
     except Exception:
@@ -474,7 +559,7 @@ def api_saude_anuncios():
     try:
         from agente_saude import monitorar_saude
         from ml_buscador import MLBuscador
-        ml = MLBuscador()
+        ml = MLBuscador(tenant_id=get_tenant_id())
         if not ml.esta_autenticado(): return jsonify({'ok': False, 'erro': 'ML não conectado'})
         return jsonify(monitorar_saude(ml.auth.access_token, ml.auth.user_id))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
@@ -725,7 +810,7 @@ def api_webhooks_eventos():
     try:
         from webhook_handler import listar_eventos
         topic = request.args.get('topic', '')
-        return jsonify(listar_eventos(limite=80, topic=topic))
+        return jsonify(listar_eventos(limite=80, topic=topic, tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 
@@ -739,7 +824,7 @@ def api_spy_anuncio():
         from agente_espiao import spy_anuncio
         d = request.get_json() or {}
         token, _ = _get_ml_token()
-        return jsonify(spy_anuncio(d.get('item_id', ''), token or ''))
+        return jsonify(spy_anuncio(d.get('item_id', ''), token or '', tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/watch-add', methods=['POST'])
@@ -749,7 +834,7 @@ def api_watch_add():
         from agente_espiao import adicionar_watch
         d = request.get_json() or {}
         token, _ = _get_ml_token()
-        return jsonify(adicionar_watch(d.get('item_id', ''), d.get('apelido', ''), token or ''))
+        return jsonify(adicionar_watch(d.get('item_id', ''), d.get('apelido', ''), token or '', tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/watch-remove', methods=['POST'])
@@ -758,7 +843,7 @@ def api_watch_remove():
     try:
         from agente_espiao import remover_watch
         d = request.get_json() or {}
-        return jsonify(remover_watch(d.get('item_id', '')))
+        return jsonify(remover_watch(d.get('item_id', ''), tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/watchlist')
@@ -768,7 +853,7 @@ def api_watchlist():
         from agente_espiao import listar_watchlist
         token, _ = _get_ml_token()
         refresh = request.args.get('refresh', '1') == '1'
-        return jsonify(listar_watchlist(token or '', refresh=refresh))
+        return jsonify(listar_watchlist(token or '', refresh=refresh, tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 @app.route('/api/ranking-busca')
@@ -799,7 +884,7 @@ def api_spy_snapshot_cron():
     try:
         from agente_espiao import snapshot_cron
         token, _ = _get_ml_token()
-        return jsonify(snapshot_cron(token or ''))
+        return jsonify(snapshot_cron(token or '', tenant_id=get_tenant_id()))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
 
@@ -810,7 +895,7 @@ def api_spy_snapshot_cron():
 @login_required
 def painel_ml():
     usuario = session.get('usuario', '')
-    return render_template_string(HTML_ML, usuario=usuario)
+    return render_template_string(HTML_ML, usuario=usuario, **_brand_ctx())
 
 
 @app.route('/config')
@@ -818,10 +903,17 @@ def painel_ml():
 def pagina_config():
     from ml_buscador import MLBuscador
     try:
-        ml = MLBuscador(); ml_ok = ml.esta_autenticado(); ml_user = ml.auth.user_id if ml_ok else None
+        ml = MLBuscador(tenant_id=get_tenant_id()); ml_ok = ml.esta_autenticado(); ml_user = ml.auth.user_id if ml_ok else None
     except: ml_ok = False; ml_user = None
     usuario = get_usuario_nome()
-    return render_template_string(HTML_CONFIG, ml_ok=ml_ok, ml_user=ml_user, usuario=usuario)
+    return render_template_string(HTML_CONFIG, ml_ok=ml_ok, ml_user=ml_user, usuario=usuario, **_brand_ctx())
+
+@app.route('/admin/usuarios')
+@admin_required
+def pagina_admin_usuarios():
+    usuario = get_usuario_nome()
+    tenant = get_tenant_info(get_tenant_id())
+    return render_template_string(HTML_ADMIN_USUARIOS, usuario=usuario, tenant=tenant, **_brand_ctx())
 
 @app.route('/api/ml-auth', methods=['POST'])
 @login_required
@@ -830,7 +922,7 @@ def api_ml_auth():
     d = request.get_json(); code = d.get('code','').strip()
     if not code: return jsonify({'ok': False, 'erro': 'Código obrigatório'})
     try:
-        ml = MLBuscador()
+        ml = MLBuscador(tenant_id=get_tenant_id())
         result = ml.trocar_codigo(code)
         return jsonify({'ok': result.get('ok', False),
                        'user_id': result.get('user_id'),
@@ -842,7 +934,7 @@ def api_ml_auth():
 def api_ml_status():
     try:
         from ml_buscador import MLBuscador
-        ml = MLBuscador()
+        ml = MLBuscador(tenant_id=get_tenant_id())
         auth = ml.auth
         exp_str = auth.expires_at.isoformat() if auth.expires_at else None
         return jsonify({
@@ -864,14 +956,14 @@ def api_ml_debug():
         from db import get_conn, USAR_POSTGRES
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute(f"SELECT id, user_id, expires_at, salvo_em, length(access_token), length(refresh_token) FROM ml_tokens WHERE id = {ph}", ('principal',))
+        cur.execute(f"SELECT id, user_id, expires_at, salvo_em, length(access_token), length(refresh_token) FROM ml_tokens WHERE id = {ph}", (get_tenant_id(),))
         row = cur.fetchone(); conn.close()
         db_info = None
         if row:
             db_info = {'user_id': row[2], 'expires_at': row[3], 'salvo_em': row[4], 'len_access': row[5], 'len_refresh': row[6]}
         from ml_buscador import MLBuscador, _carregar_token_db
-        loaded = _carregar_token_db()
-        ml = MLBuscador()
+        loaded = _carregar_token_db(get_tenant_id())
+        ml = MLBuscador(tenant_id=get_tenant_id())
         from datetime import datetime
         return jsonify({
             'ok': True,
@@ -1024,7 +1116,7 @@ HTML_DASH = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QUBO Dashboard</title>
+<title>{{ brand }} · {{ tenant_nome }}</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0a0e27;--card:#1a1f3a;--border:#2d3452;--text:#e4e6eb;--muted:#8b92a5;
@@ -1074,8 +1166,8 @@ tr:hover td{background:#1f2544}
 <body>
 
 <div class="topbar">
-  <span class="logo">QUBO</span>
-  <span style="color:var(--muted);font-size:.75rem">{{ usuario }}</span>
+  <span class="logo" title="{{ plataforma }} · {{ tenant_nome }}">{{ brand }}</span>
+  <span style="color:var(--muted);font-size:.72rem"><span style="color:#c084fc;font-weight:600">{{ tenant_nome }}</span> · {{ usuario }}{% if is_admin %} · <a href="/admin/usuarios" style="color:#fbbf24;text-decoration:none">⚙️</a>{% endif %}</span>
   <div class="spacer"></div>
   <button class="btn btn-yellow" onclick="abrirAlertaDiario()">📊 Alerta</button>
   <button class="btn btn-pink" onclick="abrirTendencias()">🔥 Tendências</button>
@@ -1580,7 +1672,7 @@ HTML_ML = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QUBO — Painel ML</title>
+<title>{{ brand }} — Painel ML</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0a0e27;--card:#1a1f3a;--border:#2d3452;--text:#e4e6eb;--muted:#8b92a5;
@@ -1616,8 +1708,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 <body>
 
 <div class="topbar">
-  <span class="logo">QUBO</span>
-  <span style="color:var(--muted);font-size:.75rem">{{ usuario }}</span>
+  <span class="logo" title="{{ plataforma }} · {{ tenant_nome }}">{{ brand }}</span>
+  <span style="color:var(--muted);font-size:.72rem"><span style="color:#c084fc;font-weight:600">{{ tenant_nome }}</span> · {{ usuario }}{% if is_admin %} · <a href="/admin/usuarios" style="color:#fbbf24;text-decoration:none">⚙️</a>{% endif %}</span>
   <div class="spacer"></div>
   <a href="/" class="btn btn-gray">← Dashboard</a>
   <a href="/config" class="btn btn-gray">⚙️ Config</a>
@@ -2517,13 +2609,139 @@ document.addEventListener('keydown', e => { if(e.key === 'Escape') document.quer
 
 
 # ════════════════════════════════════════════════════════════════════
+# HTML — ADMIN DE USUÁRIOS (tenant)
+# ════════════════════════════════════════════════════════════════════
+HTML_ADMIN_USUARIOS = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ brand }} — Admin de Usuários</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{background:#0a0e27;color:#e4e6eb;min-height:100vh}
+.topbar{background:#1a1f3a;padding:10px 20px;border-bottom:1px solid #2d3452;
+        display:flex;align-items:center;gap:16px}
+.logo{font-size:1.4rem;font-weight:900;
+     background:linear-gradient(135deg,#667eea,#c084fc);
+     -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.spacer{flex:1}
+.btn{background:#2d3452;border:none;color:#e4e6eb;padding:7px 14px;
+     border-radius:6px;cursor:pointer;font-size:.8rem;text-decoration:none;display:inline-block}
+.btn-green{background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-weight:600}
+.btn-red{background:#7f1d1d;color:#fca5a5}
+.container{max-width:1000px;margin:30px auto;padding:20px}
+.card{background:#1a1f3a;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid #2d3452}
+h1{font-size:1.6rem;margin-bottom:6px}
+.sub{color:#8b92a5;font-size:.85rem;margin-bottom:20px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px;color:#8b92a5;font-size:.75rem;text-transform:uppercase;border-bottom:1px solid #2d3452}
+td{padding:10px;border-bottom:1px solid #1a1f3a;font-size:.88rem}
+input{width:100%;padding:10px;border:1px solid #2d3452;border-radius:6px;
+      background:#0a0e27;color:#e4e6eb;font-size:.9rem;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.badge{background:#065f46;color:#4ade80;padding:3px 8px;border-radius:4px;font-size:.7rem}
+.badge-user{background:#1e3a5f;color:#60a5fa}
+.toast{position:fixed;top:20px;right:20px;padding:12px 18px;border-radius:8px;
+       background:#065f46;color:#4ade80;font-weight:600;z-index:9999;opacity:0;transition:opacity .2s}
+.toast.show{opacity:1}
+.toast.err{background:#450a0a;color:#f87171}
+.plano-badge{display:inline-block;padding:3px 8px;border-radius:4px;font-size:.7rem;
+             background:linear-gradient(135deg,#667eea,#c084fc);color:#fff;font-weight:700;margin-left:8px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo" title="{{ plataforma }} · {{ tenant_nome }}">{{ brand }}</span>
+  <span style="color:#8b92a5;font-size:.72rem"><span style="color:#c084fc;font-weight:600">{{ tenant_nome }}</span> · {{ usuario }}</span>
+  <div class="spacer"></div>
+  <a href="/" class="btn">📦 Produtos</a>
+  <a href="/ml" class="btn">🚀 Painel ML</a>
+  <a href="/logout" class="btn btn-red">Sair</a>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h1>⚙️ Usuários da {{ tenant.nome_empresa }}<span class="plano-badge">{{ tenant.plano }}</span></h1>
+    <div class="sub">Convide pessoas do seu time. Dados ficam isolados por empresa.</div>
+
+    <h3 style="font-size:1rem;margin:20px 0 10px;color:#c084fc">➕ Convidar novo usuário</h3>
+    <div class="grid">
+      <input id="n_email" type="email" placeholder="email@empresa.com">
+      <input id="n_nome" type="text" placeholder="Nome">
+      <input id="n_senha" type="password" placeholder="Senha temporária">
+      <button class="btn btn-green" onclick="convidar()">Adicionar</button>
+    </div>
+
+    <h3 style="font-size:1rem;margin:24px 0 10px;color:#c084fc">👥 Usuários ativos</h3>
+    <table>
+      <thead><tr><th>Email</th><th>Nome</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <tbody id="tb_users"><tr><td colspan="5" style="color:#8b92a5;text-align:center;padding:20px">Carregando...</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="background:#064e3b1a;border-color:#10b981">
+    <h3 style="color:#4ade80;font-size:1rem;margin-bottom:8px">🎯 Isolamento multi-tenant</h3>
+    <div style="color:#e4e6eb;font-size:.85rem;line-height:1.6">
+      • Cada usuário criado aqui só vê os dados da <b>{{ tenant.nome_empresa }}</b><br>
+      • O Mercado Livre conectado em "Painel ML" é exclusivo desta empresa<br>
+      • Catálogos, espião, watchlist e métricas são 100% isolados de outros clientes do {{ plataforma }}
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<script>
+function toast(msg, err){
+  var t=document.getElementById('toast'); t.textContent=msg;
+  t.className='toast show'+(err?' err':''); setTimeout(function(){t.className='toast';},2500);
+}
+function carregar(){
+  fetch('/api/admin/usuarios').then(function(r){return r.json();}).then(function(d){
+    if(!d.ok){toast(d.erro||'Erro',true);return;}
+    var tb=document.getElementById('tb_users');
+    if(!d.usuarios.length){tb.innerHTML='<tr><td colspan="5" style="color:#8b92a5;text-align:center;padding:20px">Sem usuários ainda</td></tr>';return;}
+    tb.innerHTML=d.usuarios.map(function(u){
+      var roleBadge=u.role==='admin'?'<span class="badge">admin</span>':'<span class="badge badge-user">'+u.role+'</span>';
+      var statusBadge=u.ativo?'<span class="badge">ativo</span>':'<span class="badge" style="background:#450a0a;color:#f87171">inativo</span>';
+      var btnRem=u.role==='admin'?'':'<button class="btn btn-red" onclick="remover('+u.id+',\\''+u.email+'\\')">Remover</button>';
+      return '<tr><td>'+u.email+'</td><td>'+u.nome+'</td><td>'+roleBadge+'</td><td>'+statusBadge+'</td><td>'+btnRem+'</td></tr>';
+    }).join('');
+  });
+}
+function convidar(){
+  var e=document.getElementById('n_email').value.trim();
+  var n=document.getElementById('n_nome').value.trim();
+  var s=document.getElementById('n_senha').value;
+  if(!e||!s){toast('Email e senha são obrigatórios',true);return;}
+  fetch('/api/admin/convidar',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:e,nome:n,senha:s,role:'user'})})
+  .then(function(r){return r.json();}).then(function(d){
+    if(d.ok){toast('✅ Usuário adicionado');['n_email','n_nome','n_senha'].forEach(function(id){document.getElementById(id).value='';});carregar();}
+    else toast(d.erro,true);
+  });
+}
+function remover(id,email){
+  if(!confirm('Remover acesso de '+email+'?')) return;
+  fetch('/api/admin/remover',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({usuario_id:id})})
+  .then(function(r){return r.json();}).then(function(d){
+    if(d.ok){toast('✅ Usuário removido');carregar();} else toast(d.erro||'Erro',true);
+  });
+}
+carregar();
+</script>
+</body>
+</html>"""
+
+
+# ════════════════════════════════════════════════════════════════════
 # HTML — PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
 HTML_CONFIG = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QUBO — Configurações</title>
+<title>{{ brand }} — Configurações</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0e27;color:#e4e6eb;font-size:.85rem}
@@ -2558,10 +2776,10 @@ input:focus,select:focus,textarea:focus{border-color:#667eea;outline:none}
 </head>
 <body>
 <div class="topbar">
-  <span class="logo">QUBO</span>
+  <span class="logo" title="{{ plataforma }} · {{ tenant_nome }}">{{ brand }}</span>
   <span style="color:#667eea;font-size:.85rem">⚙️ Configurações</span>
   <div style="flex:1"></div>
-  <span style="color:#8b92a5;font-size:.75rem">{{ usuario }}</span>
+  <span style="color:#8b92a5;font-size:.72rem"><span style="color:#c084fc;font-weight:600">{{ tenant_nome }}</span> · {{ usuario }}{% if is_admin %} · <a href="/admin/usuarios" style="color:#fbbf24;text-decoration:none">⚙️</a>{% endif %}</span>
   <a href="/" class="btn btn-blue">← Dashboard</a>
   <a href="/logout" class="btn btn-gray">Sair</a>
 </div>
@@ -2859,7 +3077,7 @@ def escolhidos():
     produtos = [dict(zip(cols, r)) for r in cur.fetchall()]
     conn.close()
     usuario = get_usuario_nome()
-    return render_template_string(HTML_ESCOLHIDOS, produtos=produtos, usuario=usuario, total=len(produtos))
+    return render_template_string(HTML_ESCOLHIDOS, produtos=produtos, usuario=usuario, total=len(produtos), **_brand_ctx())
 
 @app.route('/exportar-escolhidos')
 @login_required
@@ -2886,7 +3104,7 @@ def exportar_escolhidos():
 
 HTML_ESCOLHIDOS = """<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><title>QUBO — Escolhidos</title>
+<head><meta charset="UTF-8"><title>{{ brand }} — Escolhidos</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,sans-serif;background:#0a0e27;color:#e4e6eb;font-size:.85rem}
@@ -2905,7 +3123,7 @@ tr:hover td{background:#1f2544}
 </style></head>
 <body>
 <div class="topbar">
-  <span class="logo">QUBO</span>
+  <span class="logo" title="{{ plataforma }} · {{ tenant_nome }}">{{ brand }}</span>
   <span style="color:#8b92a5">⭐ Escolhidos ({{ total }})</span>
   <div style="flex:1"></div>
   <a href="/exportar-escolhidos" class="btn btn-green">📥 Exportar Excel</a>

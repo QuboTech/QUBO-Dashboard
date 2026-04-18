@@ -35,13 +35,14 @@ logger = logging.getLogger(__name__)
 # SCHEMA — tabela de eventos
 # ─────────────────────────────────────────────────────────────────────────────
 def garantir_tabela_webhooks():
-    """Cria tabela ml_webhooks_events se não existir."""
+    """Cria tabela ml_webhooks_events se não existir (multi-tenant)."""
     try:
         conn = get_conn(); cur = conn.cursor()
         if USAR_POSTGRES:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_webhooks_events (
                     id SERIAL PRIMARY KEY,
+                    tenant_id TEXT DEFAULT 'qubo',
                     resource TEXT,
                     topic TEXT,
                     user_id TEXT,
@@ -53,22 +54,41 @@ def garantir_tabela_webhooks():
                     payload TEXT
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_topic ON ml_webhooks_events(topic)")
+            try: cur.execute("ALTER TABLE ml_webhooks_events ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'qubo'")
+            except Exception: pass
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_tenant_topic ON ml_webhooks_events(tenant_id, topic)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_ts ON ml_webhooks_events(received_ts)")
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ml_webhooks_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT DEFAULT 'qubo',
                     resource TEXT, topic TEXT, user_id TEXT, application_id TEXT,
                     sent_at TEXT, received_at TEXT, received_ts INTEGER,
                     processed INTEGER DEFAULT 0, payload TEXT
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_topic ON ml_webhooks_events(topic)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_tenant_topic ON ml_webhooks_events(tenant_id, topic)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_whevt_ts ON ml_webhooks_events(received_ts)")
         conn.commit(); conn.close()
     except Exception as e:
         logger.warning(f"⚠️ Falha ao criar ml_webhooks_events: {e}")
+
+
+def _resolver_tenant_por_ml_user(ml_user_id: str) -> str:
+    """Descobre qual tenant é dono deste ML user_id (via ml_tokens.user_id)."""
+    if not ml_user_id:
+        return 'qubo'
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        ph = "%s" if USAR_POSTGRES else "?"
+        cur.execute(f"SELECT tenant_id, id FROM ml_tokens WHERE user_id = {ph}", (str(ml_user_id),))
+        r = cur.fetchone(); conn.close()
+        if r:
+            return r[0] or r[1] or 'qubo'
+    except Exception:
+        pass
+    return 'qubo'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,17 +123,20 @@ def processar_notificacao(body: dict) -> dict:
         received_ts = int(datetime.utcnow().timestamp())
         payload_json = json.dumps(body)[:8000]
 
+        # Resolve tenant dono deste ML user_id
+        tenant_id = _resolver_tenant_por_ml_user(user_id)
+
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
         cur.execute(f"""
             INSERT INTO ml_webhooks_events
-            (resource, topic, user_id, application_id, sent_at, received_at, received_ts, processed, payload)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, 0, {ph})
-        """, (resource, topic, user_id, app_id, sent_at, received_at, received_ts, payload_json))
+            (tenant_id, resource, topic, user_id, application_id, sent_at, received_at, received_ts, processed, payload)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, 0, {ph})
+        """, (tenant_id, resource, topic, user_id, app_id, sent_at, received_at, received_ts, payload_json))
         conn.commit(); conn.close()
 
-        logger.info(f"🔔 Webhook recebido: {topic} → {resource}")
-        return {'ok': True, 'topic': topic, 'resource': resource}
+        logger.info(f"🔔 Webhook recebido ({tenant_id}): {topic} → {resource}")
+        return {'ok': True, 'topic': topic, 'resource': resource, 'tenant_id': tenant_id}
 
     except Exception as e:
         logger.error(f"❌ Erro ao processar webhook: {e}")
@@ -135,8 +158,8 @@ TOPIC_LABEL = {
 }
 
 
-def listar_eventos(limite: int = 50, topic: str = "") -> dict:
-    """Lista os últimos eventos recebidos."""
+def listar_eventos(limite: int = 50, topic: str = "", tenant_id: str = 'qubo') -> dict:
+    """Lista os últimos eventos recebidos (escopado por tenant)."""
     try:
         garantir_tabela_webhooks()
         conn = get_conn(); cur = conn.cursor()
@@ -146,17 +169,18 @@ def listar_eventos(limite: int = 50, topic: str = "") -> dict:
             cur.execute(f"""
                 SELECT resource, topic, user_id, sent_at, received_at, received_ts, processed
                 FROM ml_webhooks_events
-                WHERE topic = {ph}
+                WHERE tenant_id = {ph} AND topic = {ph}
                 ORDER BY received_ts DESC
                 LIMIT {ph}
-            """, (topic, limite))
+            """, (tenant_id, topic, limite))
         else:
             cur.execute(f"""
                 SELECT resource, topic, user_id, sent_at, received_at, received_ts, processed
                 FROM ml_webhooks_events
+                WHERE tenant_id = {ph}
                 ORDER BY received_ts DESC
                 LIMIT {ph}
-            """, (limite,))
+            """, (tenant_id, limite))
 
         rows = cur.fetchall()
         eventos = []
@@ -178,12 +202,12 @@ def listar_eventos(limite: int = 50, topic: str = "") -> dict:
                 'link': _resource_para_link(resource, top),
             })
 
-        # Estatísticas
-        cur.execute("SELECT topic, COUNT(*) FROM ml_webhooks_events GROUP BY topic")
+        # Estatísticas (do tenant)
+        cur.execute(f"SELECT topic, COUNT(*) FROM ml_webhooks_events WHERE tenant_id = {ph} GROUP BY topic", (tenant_id,))
         stats = {row[0]: row[1] for row in cur.fetchall()}
 
-        # Último evento
-        cur.execute("SELECT MAX(received_ts) FROM ml_webhooks_events")
+        # Último evento (do tenant)
+        cur.execute(f"SELECT MAX(received_ts) FROM ml_webhooks_events WHERE tenant_id = {ph}", (tenant_id,))
         r_max = cur.fetchone()
         ultimo_ts = r_max[0] if r_max else None
 

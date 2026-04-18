@@ -26,54 +26,64 @@ TOKEN_FILE = Path("data/ml_token.json")
 TOKEN_FILE.parent.mkdir(exist_ok=True)
 
 
-def _salvar_token_db(token_data: dict):
-    """Salva token no Supabase via get_conn() (suporta REST/psycopg2/SQLite)"""
+def _salvar_token_db(token_data: dict, tenant_id: str = 'qubo'):
+    """Salva token no Supabase (1 row por tenant, id = tenant_slug)."""
     try:
         from db import get_conn, USAR_POSTGRES
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
         if USAR_POSTGRES:
             cur.execute(f"""
-                INSERT INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
-                VALUES ('principal', {ph}, {ph}, {ph}, {ph}, {ph})
+                INSERT INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em, tenant_id)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT (id) DO UPDATE SET
                     access_token = EXCLUDED.access_token,
                     refresh_token = EXCLUDED.refresh_token,
                     user_id = EXCLUDED.user_id,
                     expires_at = EXCLUDED.expires_at,
-                    salvo_em = EXCLUDED.salvo_em
+                    salvo_em = EXCLUDED.salvo_em,
+                    tenant_id = EXCLUDED.tenant_id
             """, (
+                tenant_id,
                 token_data.get('access_token'),
                 token_data.get('refresh_token'),
                 str(token_data.get('user_id', '')),
                 token_data.get('expires_at'),
-                token_data.get('salvo_em', datetime.now().isoformat())
+                token_data.get('salvo_em', datetime.now().isoformat()),
+                tenant_id
             ))
         else:
             cur.execute(f"""
-                INSERT OR REPLACE INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em)
-                VALUES ('principal', {ph}, {ph}, {ph}, {ph}, {ph})
+                INSERT OR REPLACE INTO ml_tokens (id, access_token, refresh_token, user_id, expires_at, salvo_em, tenant_id)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             """, (
+                tenant_id,
                 token_data.get('access_token'),
                 token_data.get('refresh_token'),
                 str(token_data.get('user_id', '')),
                 token_data.get('expires_at'),
-                token_data.get('salvo_em', datetime.now().isoformat())
+                token_data.get('salvo_em', datetime.now().isoformat()),
+                tenant_id
             ))
         conn.commit(); conn.close()
-        logger.info("✅ ML: Token salvo no banco")
+        logger.info(f"✅ ML: Token salvo no banco (tenant={tenant_id})")
     except Exception as e:
         logger.warning(f"⚠️ ML: Erro ao salvar token no banco: {e}")
 
 
-def _carregar_token_db() -> dict:
-    """Carrega token do banco via get_conn() (suporta REST/psycopg2/SQLite)"""
+def _carregar_token_db(tenant_id: str = 'qubo') -> dict:
+    """Carrega token do banco para um tenant específico."""
     try:
         from db import get_conn, USAR_POSTGRES
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
-        cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", ('principal',))
-        row = cur.fetchone(); conn.close()
+        cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", (tenant_id,))
+        row = cur.fetchone()
+        # Fallback legacy: se não encontrou pelo tenant_id e for qubo, tenta 'principal'
+        if not row and tenant_id == 'qubo':
+            cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", ('principal',))
+            row = cur.fetchone()
+        conn.close()
         if row:
             return {
                 'access_token': row[0],
@@ -98,18 +108,19 @@ AUTH_URL = (
 
 
 class MLAuth:
-    """Gerencia autenticação OAuth com Mercado Livre"""
-    
-    def __init__(self):
+    """Gerencia autenticação OAuth com Mercado Livre (por tenant)"""
+
+    def __init__(self, tenant_id: str = 'qubo'):
+        self.tenant_id = tenant_id or 'qubo'
         self.access_token = None
         self.refresh_token = None
         self.expires_at = None
         self.user_id = None
         self._carregar_token()
-    
+
     def _carregar_token(self):
         # 1. Tenta Supabase primeiro (persiste entre deploys)
-        data = _carregar_token_db()
+        data = _carregar_token_db(self.tenant_id)
         
         # 2. Fallback para arquivo local
         if not data and TOKEN_FILE.exists():
@@ -147,13 +158,14 @@ class MLAuth:
             'expires_at': self.expires_at.isoformat(),
             'salvo_em': datetime.now().isoformat()
         }
-        # Salva no Supabase (persiste entre deploys)
-        _salvar_token_db(token_data)
-        # Salva também em arquivo local (fallback)
-        try:
-            TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
-        except Exception:
-            pass
+        # Salva no Supabase (persiste entre deploys) — escopado por tenant
+        _salvar_token_db(token_data, self.tenant_id)
+        # Salva também em arquivo local (fallback) — só pra Qubo (compat)
+        if self.tenant_id == 'qubo':
+            try:
+                TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
+            except Exception:
+                pass
         logger.info(f"✅ ML: Token salvo no Supabase + local (expira em {expires_in//3600}h)")
     
     def _token_expirado(self):
@@ -240,10 +252,11 @@ class MLAuth:
 
 
 class MLBuscador:
-    """Busca produtos e calcula taxas no Mercado Livre"""
-    
-    def __init__(self):
-        self.auth = MLAuth()
+    """Busca produtos e calcula taxas no Mercado Livre (tenant-aware)"""
+
+    def __init__(self, tenant_id: str = 'qubo'):
+        self.tenant_id = tenant_id or 'qubo'
+        self.auth = MLAuth(tenant_id=self.tenant_id)
         self.base_url = "https://api.mercadolibre.com"
     
     def esta_autenticado(self):
