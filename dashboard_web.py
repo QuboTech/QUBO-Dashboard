@@ -731,6 +731,14 @@ def api_webhooks_eventos():
 # ════════════════════════════════════════════════════════════════════
 # PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
+@app.route('/ml')
+def painel_ml():
+    if not session.get('logado'):
+        return redirect('/login')
+    usuario = session.get('usuario', '')
+    return render_template_string(HTML_ML, usuario=usuario)
+
+
 @app.route('/config')
 @login_required
 def pagina_config():
@@ -998,15 +1006,7 @@ tr:hover td{background:#1f2544}
   <button class="btn btn-yellow" onclick="abrirAlertaDiario()">📊 Alerta</button>
   <button class="btn btn-pink" onclick="abrirTendencias()">🔥 Tendências</button>
   <button class="btn btn-cyan" onclick="abrirSaude()">🏥 Saúde</button>
-  <button class="btn" style="background:#1d4ed8;color:#fff" onclick="abrirPedidos()">🛒 Pedidos</button>
-  <button class="btn" style="background:#7c2d12;color:#fff" onclick="abrirPerguntas()">❓ Perguntas</button>
-  <button class="btn" style="background:#134e4a;color:#fff" onclick="abrirMeusAnuncios()">📋 Anúncios</button>
-  <button class="btn" style="background:#3b0764;color:#fff" onclick="abrirReputacao()">⭐ Reputação</button>
-  <button class="btn" style="background:#1c1917;color:#fbbf24;border:1px solid #78350f" onclick="abrirFaturamento()">💰 Faturamento</button>
-  <button class="btn" style="background:#166534;color:#fff" onclick="abrirMetricas()">📊 Métricas</button>
-  <button class="btn" style="background:#701a75;color:#fff" onclick="abrirBenchmark()">💵 Price Win</button>
-  <button class="btn" style="background:#991b1b;color:#fff" onclick="abrirWebhooks()">🔔 Eventos</button>
-  <button class="btn" style="background:#0369a1;color:#fff" onclick="abrirCriarAnuncio()">📝 Publicar ML</button>
+  <a href="/ml" class="btn" style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none">🚀 Painel ML</a>
   <button class="btn btn-green" onclick="mostrarModalProduto()">➕ Produto</button>
   <button class="btn btn-blue" onclick="exportar()">📥 Excel</button>
   <button class="btn btn-gray" onclick="window.location='/escolhidos'">⭐ Escolhidos ({{ stats.escolhidos }})</button>
@@ -1486,6 +1486,107 @@ function mostrarModalSaude(d){
   document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
   document.body.insertAdjacentHTML('beforeend',h);
 }
+
+// ── ML Painel (em /ml) ────────────────────────────────────────────
+// As funcionalidades de ML (Pedidos, Perguntas, Anúncios, Reputação,
+// Faturamento, Métricas, Price to Win, Webhooks, Publicar) foram
+// movidas para a rota /ml (página separada).
+
+// Atalho Enter no filtro
+document.addEventListener('keydown', e => { if(e.key === 'Escape') document.querySelectorAll('.modal-bg').forEach(m=>m.remove()); });
+</script>
+</body></html>"""
+
+
+# ════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# HTML — PAINEL ML (PÁGINA SEPARADA)
+# ════════════════════════════════════════════════════════════════════
+HTML_ML = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QUBO — Painel ML</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e27;--card:#1a1f3a;--border:#2d3452;--text:#e4e6eb;--muted:#8b92a5;
+  --green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#667eea;--purple:#c084fc}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);font-size:.85rem}
+.topbar{background:var(--card);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:sticky;top:0;z-index:100}
+.logo{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-right:8px}
+.btn{padding:5px 12px;border:none;border-radius:5px;cursor:pointer;font-size:.78rem;font-weight:600;transition:opacity .15s;text-decoration:none;display:inline-block}
+.btn:hover{opacity:.85}.btn-blue{background:#667eea;color:#fff}.btn-green{background:#059669;color:#fff}
+.btn-yellow{background:#f59e0b;color:#000}.btn-pink{background:#ec4899;color:#fff}
+.btn-cyan{background:#0891b2;color:#fff}.btn-purple{background:#7c3aed;color:#fff}
+.btn-gray{background:#2d3452;color:var(--text)}.btn-red{background:#dc2626;color:#fff}
+.spacer{flex:1}
+.hero{padding:22px 20px 8px;text-align:center}
+.hero h1{font-size:1.4rem;font-weight:800;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.hero p{color:var(--muted);font-size:.82rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;padding:18px 20px 60px;max-width:1280px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;cursor:pointer;transition:transform .15s,border-color .15s,box-shadow .15s}
+.card:hover{transform:translateY(-3px);border-color:var(--blue);box-shadow:0 8px 24px rgba(102,126,234,.15)}
+.card-ico{font-size:1.9rem;margin-bottom:8px;display:block}
+.card-title{font-size:.95rem;font-weight:700;margin-bottom:4px;color:var(--text)}
+.card-desc{color:var(--muted);font-size:.75rem;line-height:1.45}
+.card-tag{display:inline-block;background:#0a0e27;border:1px solid var(--border);color:var(--muted);font-size:.6rem;padding:2px 7px;border-radius:10px;margin-top:10px;font-family:monospace}
+.modal-bg{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;justify-content:center;align-items:center;z-index:9999;padding:20px}
+.modal{background:var(--card);padding:20px;border-radius:10px;width:500px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal h3{margin-bottom:14px;font-size:1rem}
+.modal label{display:block;color:var(--muted);font-size:.72rem;text-transform:uppercase;margin-bottom:4px}
+.modal input,.modal select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:5px;margin-bottom:12px;font-size:.85rem}
+.toast{position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:6px;font-size:.82rem;font-weight:600;z-index:9999;animation:fadeIn .2s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">QUBO</span>
+  <span style="color:var(--muted);font-size:.75rem">{{ usuario }}</span>
+  <div class="spacer"></div>
+  <a href="/" class="btn btn-gray">← Dashboard</a>
+  <a href="/config" class="btn btn-gray">⚙️ Config</a>
+</div>
+
+<div class="hero">
+  <h1>🚀 Painel ML — Integração Mercado Livre</h1>
+  <p>Todas as métricas e operações via API oficial do ML · <span id="ml-status" style="color:var(--yellow)">verificando conexão...</span></p>
+</div>
+
+<div class="grid">
+  <div class="card" onclick="abrirPedidos()"><span class="card-ico">🛒</span><div class="card-title">Pedidos</div><div class="card-desc">Pedidos recebidos · status · valores · compradores · 30 dias.</div><span class="card-tag">/orders/search</span></div>
+  <div class="card" onclick="abrirPerguntas()"><span class="card-ico">❓</span><div class="card-title">Perguntas</div><div class="card-desc">Sem resposta — responda direto daqui em 1 clique.</div><span class="card-tag">/questions/search</span></div>
+  <div class="card" onclick="abrirMeusAnuncios()"><span class="card-ico">📋</span><div class="card-title">Meus Anúncios</div><div class="card-desc">Lista completa · pausar · ativar · editar estoque.</div><span class="card-tag">/users/items/search</span></div>
+  <div class="card" onclick="abrirReputacao()"><span class="card-ico">⭐</span><div class="card-title">Reputação</div><div class="card-desc">Nível · cancelamentos · atrasos · capacidade de anúncios.</div><span class="card-tag">/marketplace/cap</span></div>
+  <div class="card" onclick="abrirFaturamento()"><span class="card-ico">💰</span><div class="card-title">Faturamento</div><div class="card-desc">Cobrado · créditos · saldo do período atual no ML.</div><span class="card-tag">/billing</span></div>
+  <div class="card" onclick="abrirMetricas()"><span class="card-ico">📊</span><div class="card-title">Métricas de Visitas</div><div class="card-desc">Visitas · conversão · top · sem visitas · baixa conversão.</div><span class="card-tag">/items_visits</span></div>
+  <div class="card" onclick="abrirBenchmark()"><span class="card-ico">💵</span><div class="card-title">Price to Win</div><div class="card-desc">Preço competitivo oficial ML · identifica caros e baratos.</div><span class="card-tag">/price_to_win</span></div>
+  <div class="card" onclick="abrirWebhooks()"><span class="card-ico">🔔</span><div class="card-title">Eventos Webhook</div><div class="card-desc">Eventos em tempo real do ML · orders · items · questions.</div><span class="card-tag">/webhook/ml</span></div>
+  <div class="card" onclick="abrirCriarAnuncio()"><span class="card-ico">📝</span><div class="card-title">Publicar Anúncio</div><div class="card-desc">Cria anúncio direto no ML · categoria sugerida · validação.</div><span class="card-tag">POST /items</span></div>
+</div>
+
+<script>
+const fmt = (v,d=2) => v!=null ? parseFloat(v).toFixed(d).replace('.',',') : '-';
+
+function showToast(msg, erro=false){
+  document.querySelectorAll('.toast').forEach(t=>t.remove());
+  const t = document.createElement('div');
+  t.className='toast'; t.textContent=msg;
+  t.style.background = erro ? '#450a0a' : '#064e3b';
+  t.style.color = erro ? '#f87171' : '#4ade80';
+  t.style.border = `1px solid ${erro?'#f87171':'#4ade80'}`;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3500);
+}
+
+// Status de conexão ML no hero
+fetch('/api/ml-status').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('ml-status');
+  if(!el) return;
+  if(d.conectado){ el.textContent = '✅ Conectado: ' + (d.apelido || d.user_id || 'OK'); el.style.color = '#4ade80'; }
+  else { el.textContent = '❌ Desconectado — acesse /config'; el.style.color = '#f87171'; }
+}).catch(()=>{});
 
 // ── Pedidos ───────────────────────────────────────────────────────
 function abrirPedidos(dias=30, statusFiltro=''){
@@ -2074,7 +2175,7 @@ function publicarAnuncioForm(){
   }).catch(()=>showToast('❌ Erro',true));
 }
 
-// Atalho Enter no filtro
+// Fecha modal com Escape
 document.addEventListener('keydown', e => { if(e.key === 'Escape') document.querySelectorAll('.modal-bg').forEach(m=>m.remove()); });
 </script>
 </body></html>"""
