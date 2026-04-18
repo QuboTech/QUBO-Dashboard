@@ -732,9 +732,8 @@ def api_webhooks_eventos():
 # PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
 @app.route('/ml')
+@login_required
 def painel_ml():
-    if not session.get('logado'):
-        return redirect('/login')
     usuario = session.get('usuario', '')
     return render_template_string(HTML_ML, usuario=usuario)
 
