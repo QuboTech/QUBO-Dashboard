@@ -728,6 +728,81 @@ def api_webhooks_eventos():
         return jsonify(listar_eventos(limite=80, topic=topic))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
+
+# ════════════════════════════════════════════════════════════════════
+# ESPIÃO — vendas/snapshot de qualquer anúncio ML (todos os sellers)
+# ════════════════════════════════════════════════════════════════════
+@app.route('/api/spy-anuncio', methods=['POST'])
+@login_required
+def api_spy_anuncio():
+    try:
+        from agente_espiao import spy_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        return jsonify(spy_anuncio(d.get('item_id', ''), token or ''))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/watch-add', methods=['POST'])
+@login_required
+def api_watch_add():
+    try:
+        from agente_espiao import adicionar_watch
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        return jsonify(adicionar_watch(d.get('item_id', ''), d.get('apelido', ''), token or ''))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/watch-remove', methods=['POST'])
+@login_required
+def api_watch_remove():
+    try:
+        from agente_espiao import remover_watch
+        d = request.get_json() or {}
+        return jsonify(remover_watch(d.get('item_id', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/watchlist')
+@login_required
+def api_watchlist():
+    try:
+        from agente_espiao import listar_watchlist
+        token, _ = _get_ml_token()
+        refresh = request.args.get('refresh', '1') == '1'
+        return jsonify(listar_watchlist(token or '', refresh=refresh))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/ranking-busca')
+@login_required
+def api_ranking_busca():
+    try:
+        from agente_espiao import ranking_busca
+        query = request.args.get('q', '').strip()
+        limite = int(request.args.get('limite', 30))
+        token, _ = _get_ml_token()
+        return jsonify(ranking_busca(query, limite, token or ''))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/ranking-categoria')
+@login_required
+def api_ranking_categoria():
+    try:
+        from agente_espiao import ranking_categoria
+        cat = request.args.get('cat', '').strip()
+        limite = int(request.args.get('limite', 30))
+        token, _ = _get_ml_token()
+        return jsonify(ranking_categoria(cat, limite, token or ''))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/spy-snapshot-cron', methods=['POST'])
+@login_required
+def api_spy_snapshot_cron():
+    try:
+        from agente_espiao import snapshot_cron
+        token, _ = _get_ml_token()
+        return jsonify(snapshot_cron(token or ''))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+
 # ════════════════════════════════════════════════════════════════════
 # PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
@@ -1563,6 +1638,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="card" onclick="abrirBenchmark()"><span class="card-ico">💵</span><div class="card-title">Price to Win</div><div class="card-desc">Preço competitivo oficial ML · identifica caros e baratos.</div><span class="card-tag">/price_to_win</span></div>
   <div class="card" onclick="abrirWebhooks()"><span class="card-ico">🔔</span><div class="card-title">Eventos Webhook</div><div class="card-desc">Eventos em tempo real do ML · orders · items · questions.</div><span class="card-tag">/webhook/ml</span></div>
   <div class="card" onclick="abrirCriarAnuncio()"><span class="card-ico">📝</span><div class="card-title">Publicar Anúncio</div><div class="card-desc">Cria anúncio direto no ML · categoria sugerida · validação.</div><span class="card-tag">POST /items</span></div>
+  <div class="card" style="border-color:#f59e0b" onclick="abrirEspiao()"><span class="card-ico">🕵️</span><div class="card-title">Espião de Anúncios</div><div class="card-desc">Raio-X de qualquer MLB: vendas totais, preço, vendedor, reputação. Vigie concorrentes.</div><span class="card-tag">mini-Metrify</span></div>
+  <div class="card" style="border-color:#8b5cf6" onclick="abrirWatchlist()"><span class="card-ico">👁️</span><div class="card-title">Watchlist</div><div class="card-desc">Concorrentes monitorados · vendas últimos 7/30 dias · variação de preço.</div><span class="card-tag">snapshot diário</span></div>
+  <div class="card" style="border-color:#ec4899" onclick="abrirRanking()"><span class="card-ico">🏆</span><div class="card-title">Top Vendas</div><div class="card-desc">Ranking de mais vendidos por busca ou categoria · receita estimada.</div><span class="card-tag">/sites/MLB/search</span></div>
 </div>
 
 <script>
@@ -1916,21 +1994,26 @@ function abrirMetricas(dias=30){
 function mostrarModalMetricas(d){
   const fmt1=v=>v!=null?parseFloat(v).toFixed(1).replace('.',','):'0,0';
   const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
-  const rowAn=(a)=>`<tr style="border-bottom:1px solid #1a1f3a">
+  const rowAn=(a)=>{
+    const rpv=a.rs_por_visita||0;
+    const corRpv=rpv>=10?'#4ade80':rpv>=5?'#fbbf24':'#f87171';
+    const badge=a.atinge_benchmark?'<span style="background:#065f46;color:#4ade80;padding:1px 5px;border-radius:3px;font-size:.65rem;margin-left:3px">✓</span>':'';
+    return `<tr style="border-bottom:1px solid #1a1f3a">
     <td style="padding:3px 5px">${a.thumbnail?`<img src="${a.thumbnail}" style="width:24px;height:24px;object-fit:cover;border-radius:3px">`:''}</td>
-    <td style="padding:3px 7px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem" title="${a.titulo}">${a.titulo}</td>
+    <td style="padding:3px 7px;color:#e4e6eb;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem" title="${a.titulo}">${a.titulo}</td>
     <td style="padding:3px 7px;color:#60a5fa;text-align:right;font-weight:700">${a.visitas}</td>
     <td style="padding:3px 7px;color:#fbbf24;text-align:right">${a.vendas_total}</td>
     <td style="padding:3px 7px;color:${a.conversao_pct>=3?'#4ade80':a.conversao_pct>=1?'#fbbf24':'#f87171'};text-align:right;font-weight:700">${fmt1(a.conversao_pct)}%</td>
     <td style="padding:3px 7px;color:#4ade80;text-align:right">R$ ${fmt2(a.preco)}</td>
+    <td style="padding:3px 7px;color:${corRpv};text-align:right;font-weight:700" title="Meta: R$ 10,00/visita">R$ ${fmt2(rpv)}${badge}</td>
     <td><a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem">↗</a></td>
-  </tr>`;
+  </tr>`;};
 
   const renderBlocoLista=(titulo,lista,cor,emoji,vazio)=>{
     if(!lista||!lista.length)return`<div style="color:#8b92a5;text-align:center;padding:10px;font-size:.78rem">${vazio}</div>`;
     return `<div style="margin-bottom:14px"><div style="color:${cor};font-weight:700;font-size:.8rem;margin-bottom:6px">${emoji} ${titulo} (${lista.length})</div>
       <div style="max-height:180px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.75rem">
-      <thead><tr style="border-bottom:1px solid #2d3452"><th style="width:30px"></th><th style="padding:3px 5px;color:#8b92a5;text-align:left">Anúncio</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Visitas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Vendas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Conv.</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Preço</th><th></th></tr></thead>
+      <thead><tr style="border-bottom:1px solid #2d3452"><th style="width:30px"></th><th style="padding:3px 5px;color:#8b92a5;text-align:left">Anúncio</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Visitas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Vendas</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Conv.</th><th style="padding:3px 5px;color:#8b92a5;text-align:right">Preço</th><th style="padding:3px 5px;color:#8b92a5;text-align:right" title="Receita R$ por visita (meta: R$ 10)">R$/Visita</th><th></th></tr></thead>
       <tbody>${lista.map(rowAn).join('')}</tbody></table></div></div>`;
   };
 
@@ -1946,11 +2029,28 @@ function mostrarModalMetricas(d){
         <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px">
+    ${(()=>{
+      const rpv=d.rs_por_visita||0;
+      const meta=d.benchmark_rs_visita||10;
+      const pct=d.pct_benchmark||0;
+      const ok=d.atinge_benchmark_geral;
+      const cor=ok?'#4ade80':pct>=70?'#fbbf24':'#f87171';
+      const bg=ok?'#064e3b':pct>=70?'#3b2700':'#450a0a';
+      const msg=ok?`✅ Acima da meta (R$ ${meta.toFixed(2).replace('.',',')}/visita)`:
+                   `⚠️ Abaixo da meta — está em ${pct.toFixed(1).replace('.',',')}% de R$ ${meta.toFixed(2).replace('.',',')}/visita`;
+      return `<div style="background:${bg};border:1px solid ${cor};padding:8px 12px;border-radius:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="color:${cor};font-weight:700;font-size:.85rem">🎯 Benchmark: 1000 visitas = R$ 10.000 em vendas</div>
+        <div style="color:#e4e6eb;font-size:.75rem">${msg}</div></div>
+        <div style="text-align:right"><div style="color:#8b92a5;font-size:.65rem">Receita estimada (${d.periodo_dias}d)</div>
+        <div style="color:${cor};font-weight:700;font-size:1rem">R$ ${(d.receita_estimada||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+      </div>`;
+    })()}
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px">
       <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Total Visitas</div><div style="font-size:1.3rem;font-weight:700;color:#60a5fa">${(d.total_visitas_vendedor||0).toLocaleString('pt-BR')}</div></div>
       <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Média/Dia</div><div style="font-size:1.3rem;font-weight:700;color:#c084fc">${fmt1(d.media_diaria)}</div></div>
       <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Vendas</div><div style="font-size:1.3rem;font-weight:700;color:#4ade80">${d.total_vendas_periodo||0}</div></div>
       <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Conv. Média</div><div style="font-size:1.3rem;font-weight:700;color:#fbbf24">${fmt1(d.conversao_media_pct)}%</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center" title="Meta: R$ 10,00 por visita"><div style="font-size:.6rem;color:#8b92a5">R$/Visita</div><div style="font-size:1.3rem;font-weight:700;color:${(d.rs_por_visita||0)>=10?'#4ade80':(d.rs_por_visita||0)>=5?'#fbbf24':'#f87171'}">R$ ${fmt2(d.rs_por_visita)}</div></div>
       <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Analisados</div><div style="font-size:1.3rem;font-weight:700;color:#8b92a5">${d.total_anuncios_analisados||0}</div></div>
     </div>
     ${renderBlocoLista('Top Visitados',d.top_anuncios,'#4ade80','🏆','Sem dados.')}
@@ -2172,6 +2272,242 @@ function publicarAnuncioForm(){
     if(d.ok){res.innerHTML=`<div style="background:#064e3b;color:#4ade80;padding:10px;border-radius:5px">✅ ${d.msg} · <a href="${d.link}" target="_blank" style="color:#60a5fa">Ver anúncio →</a></div>`;showToast('✅ Publicado!');}
     else{res.innerHTML=`<div style="background:#450a0a;color:#f87171;padding:10px;border-radius:5px">❌ ${d.erro}</div>`;}
   }).catch(()=>showToast('❌ Erro',true));
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ESPIÃO — mini-Metrify
+// ══════════════════════════════════════════════════════════════════
+const BENCHMARK_RS_POR_VISITA = 10.0;  // meta: 1000 visitas = R$ 10k
+
+function abrirEspiao(){
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #f59e0b;width:560px" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h3 style="color:#fbbf24">🕵️ Espião de Anúncios</h3>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <p style="color:#8b92a5;font-size:.8rem;margin-bottom:12px">Cole um <code style="color:#fbbf24">MLBxxxxxxxxxx</code>, link do anúncio ou URL de busca. Dá pra espiar qualquer vendedor.</p>
+    <input id="spy-input" placeholder="MLB1234567890 ou https://produto.mercadolivre.com.br/..." style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:10px;border-radius:5px;margin-bottom:10px;font-family:monospace;font-size:.85rem">
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-bottom:10px">
+      <button class="btn btn-yellow" onclick="executarSpy()">🔍 Espionar</button>
+    </div>
+    <div id="spy-result"></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+  setTimeout(()=>document.getElementById('spy-input').focus(),100);
+  document.getElementById('spy-input').addEventListener('keydown',e=>{if(e.key==='Enter')executarSpy();});
+}
+
+function executarSpy(){
+  const v=document.getElementById('spy-input').value.trim();
+  if(!v){showToast('❌ Informe um MLB ou link',true);return;}
+  showToast('🕵️ Espionando...');
+  fetch('/api/spy-anuncio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_id:v})})
+  .then(r=>r.json()).then(d=>{
+    const res=document.getElementById('spy-result');
+    if(!d.ok){res.innerHTML=`<div style="background:#450a0a;color:#f87171;padding:10px;border-radius:5px">❌ ${d.erro}</div>`;return;}
+    res.innerHTML=renderSpy(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function renderSpy(d){
+  const ved=d.vendedor||{};
+  const delta=d.delta||{};
+  const badgeWatch=d.monitorado
+    ? `<button class="btn btn-gray" style="font-size:.7rem" onclick="toggleWatch('${d.item_id}',false)">🗑️ Remover da watchlist</button>`
+    : `<button class="btn" style="background:#8b5cf6;color:#fff;font-size:.7rem" onclick="toggleWatch('${d.item_id}',true)">👁️ Monitorar diariamente</button>`;
+  const statusCor=d.status==='active'?'#4ade80':d.status==='paused'?'#fbbf24':'#f87171';
+  const rev7=delta.tem_historico?`<div style="background:#064e3b;padding:8px;border-radius:5px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Vendas 7d</div><div style="font-size:1.3rem;font-weight:700;color:#4ade80">${delta.vendas_7d||0}</div><div style="font-size:.7rem;color:#4ade80">R$ ${fmt(d.receita_7d||0)}</div></div>`
+    :`<div style="background:#1c1917;padding:8px;border-radius:5px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Vendas 7d</div><div style="font-size:.85rem;color:#8b92a5">sem histórico<br>ainda</div></div>`;
+  const priceDiff=delta.tem_historico && delta.preco_diff_7d!==0
+    ? `<span style="color:${delta.preco_diff_7d>0?'#f87171':'#4ade80'};font-size:.7rem">${delta.preco_diff_7d>0?'▲':'▼'} R$ ${fmt(Math.abs(delta.preco_diff_7d))} em 7d</span>`
+    : '';
+  return `<div style="background:#0a0e27;border-radius:6px;padding:14px;margin-top:6px">
+    <div style="display:flex;gap:10px;margin-bottom:10px">
+      ${d.thumbnail?`<img src="${d.thumbnail}" style="width:70px;height:70px;object-fit:cover;border-radius:5px">`:''}
+      <div style="flex:1">
+        <div style="font-weight:700;color:#e4e6eb;font-size:.88rem;line-height:1.3">${d.titulo}</div>
+        <div style="color:#8b92a5;font-size:.7rem;margin-top:2px"><code style="color:#fbbf24">${d.item_id}</code> · ${d.categoria_nome||d.category_id}</div>
+        <div style="color:${statusCor};font-size:.72rem;margin-top:3px">${d.status==='active'?'🟢 Ativo':d.status==='paused'?'🟡 Pausado':'🔴 '+d.status} · ${d.condicao} · ${d.tipo_anuncio}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+      <div style="background:#1a1f3a;padding:8px;border-radius:5px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Preço</div><div style="font-size:1.1rem;font-weight:700;color:#4ade80">R$ ${fmt(d.preco)}</div>${priceDiff}</div>
+      <div style="background:#1a1f3a;padding:8px;border-radius:5px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Vendas TOTAIS</div><div style="font-size:1.3rem;font-weight:800;color:#fbbf24">${d.vendas_total}</div><div style="font-size:.65rem;color:#8b92a5">acumulado</div></div>
+      <div style="background:#1a1f3a;padding:8px;border-radius:5px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Estoque</div><div style="font-size:1.1rem;font-weight:700;color:${d.estoque>5?'#4ade80':d.estoque>0?'#fbbf24':'#f87171'}">${d.estoque}</div></div>
+      ${rev7}
+    </div>
+    <div style="background:#1a1f3a;padding:10px;border-radius:5px;margin-bottom:10px">
+      <div style="color:#8b92a5;font-size:.7rem;margin-bottom:4px">💰 Receita acumulada estimada</div>
+      <div style="font-size:1.2rem;font-weight:800;color:#c084fc">R$ ${fmt(d.receita_acum)}</div>
+      <div style="color:#8b92a5;font-size:.65rem">vendas totais × preço atual (estimativa)</div>
+    </div>
+    <div style="background:#1a1f3a;padding:10px;border-radius:5px;margin-bottom:10px">
+      <div style="color:#8b92a5;font-size:.7rem;margin-bottom:4px">🏪 Vendedor</div>
+      <div style="font-size:.88rem;color:#e4e6eb">${ved.apelido||'?'} · <span style="color:#8b92a5">${ved.nivel||'-'}</span></div>
+      <div style="color:#8b92a5;font-size:.7rem">${(ved.transacoes||0).toLocaleString('pt-BR')} transações · ${ved.positivas_pct||0}% positivas ${ved.cidade?' · '+ved.cidade:''}</div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:space-between;align-items:center">
+      <a href="${d.link}" target="_blank" class="btn btn-blue" style="font-size:.72rem">↗ Abrir no ML</a>
+      ${badgeWatch}
+    </div>
+    ${!delta.tem_historico?'<div style="color:#8b92a5;font-size:.7rem;margin-top:8px;text-align:center">💡 Monitore para ver "vendas no período" a partir de amanhã</div>':''}
+  </div>`;
+}
+
+function toggleWatch(itemId, add){
+  const url=add?'/api/watch-add':'/api/watch-remove';
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_id:itemId})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){showToast(add?'👁️ Adicionado à watchlist':'🗑️ Removido');executarSpy();}
+    else{showToast('❌ '+d.erro,true);}
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// WATCHLIST
+// ══════════════════════════════════════════════════════════════════
+function abrirWatchlist(){
+  showToast('👁️ Atualizando watchlist... (snapshot de cada item)');
+  fetch('/api/watchlist').then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;}
+    mostrarModalWatchlist(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalWatchlist(d){
+  const rows=(d.itens||[]).map(i=>{
+    const priceDiff=i.preco_diff_7d && i.preco_diff_7d!==0
+      ? `<span style="color:${i.preco_diff_7d>0?'#f87171':'#4ade80'};font-size:.66rem">${i.preco_diff_7d>0?'▲':'▼'}${fmt(Math.abs(i.preco_diff_7d))}</span>`
+      : '';
+    return `<tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:4px 6px">${i.thumbnail?`<img src="${i.thumbnail}" style="width:32px;height:32px;object-fit:cover;border-radius:3px">`:''}</td>
+      <td style="padding:4px 7px;max-width:180px">
+        <div style="color:#e4e6eb;font-size:.76rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${i.titulo}">${i.apelido||i.titulo}</div>
+        <div style="color:#8b92a5;font-size:.64rem"><code>${i.item_id}</code></div>
+      </td>
+      <td style="padding:4px 7px;color:#4ade80;text-align:right;font-weight:700">R$ ${fmt(i.preco)}<br>${priceDiff}</td>
+      <td style="padding:4px 7px;color:#fbbf24;text-align:right;font-weight:700">${i.sold_total}</td>
+      <td style="padding:4px 7px;color:${i.vendas_7d>0?'#4ade80':'#8b92a5'};text-align:right;font-weight:700">${i.tem_historico?'+'+i.vendas_7d:'—'}<br><span style="font-size:.62rem;color:#8b92a5">${i.tem_historico?'R$ '+fmt(i.receita_7d):'aguarde'}</span></td>
+      <td style="padding:4px 7px;color:#c084fc;text-align:right">${i.tem_historico?'+'+i.vendas_30d:'—'}</td>
+      <td style="padding:4px 7px;color:${i.estoque>5?'#4ade80':i.estoque>0?'#fbbf24':'#f87171'};text-align:center">${i.estoque}</td>
+      <td style="padding:4px 4px;white-space:nowrap">
+        <a href="${i.link}" target="_blank" style="color:#667eea;font-size:.72rem;margin-right:4px">↗</a>
+        <button onclick="toggleWatch('${i.item_id}',false);setTimeout(abrirWatchlist,500)" style="background:#450a0a;border:none;color:#f87171;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:.65rem">🗑️</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #8b5cf6;width:1000px;max-height:88vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div><h3 style="color:#c084fc">👁️ Watchlist de Concorrentes</h3>
+      <div style="color:#8b92a5;font-size:.72rem">${d.total} anúncios monitorados · snapshot diário · ${d.gerado_em}</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn" style="background:#8b5cf6;color:#fff" onclick="abrirEspiao()">+ Adicionar</button>
+        <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:560px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th style="width:40px"></th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:left">Anúncio</th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:right">Preço</th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:right">Vendas Tot</th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:right">7d</th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:right">30d</th>
+        <th style="padding:6px 7px;color:#8b92a5;text-align:center">Estoque</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" style="padding:30px;text-align:center;color:#8b92a5">Watchlist vazia. Use o <b>Espião</b> para adicionar anúncios.</td></tr>'}</tbody>
+    </table></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RANKING — Top Vendas por Busca/Categoria
+// ══════════════════════════════════════════════════════════════════
+function abrirRanking(){
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #ec4899;width:560px" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h3 style="color:#f472b6">🏆 Top Vendas — Ranking</h3>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <p style="color:#8b92a5;font-size:.8rem;margin-bottom:12px">Descubra quem mais vende num nicho. Por busca (ex: <i>tênis nike</i>) ou categoria (ex: <code>MLB1276</code>).</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+      <button class="btn btn-gray" onclick="document.getElementById('rk-tipo').value='busca';document.getElementById('rk-input').placeholder='tênis nike air max'">🔎 Por Busca</button>
+      <button class="btn btn-gray" onclick="document.getElementById('rk-tipo').value='categoria';document.getElementById('rk-input').placeholder='MLB1276'">📁 Por Categoria</button>
+    </div>
+    <input type="hidden" id="rk-tipo" value="busca">
+    <input id="rk-input" placeholder="tênis nike air max" style="width:100%;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:10px;border-radius:5px;margin-bottom:10px;font-size:.85rem">
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-bottom:10px">
+      <button class="btn" style="background:#ec4899;color:#fff" onclick="executarRanking()">🏆 Ranquear</button>
+    </div>
+    <div id="rk-result"></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+  setTimeout(()=>document.getElementById('rk-input').focus(),100);
+  document.getElementById('rk-input').addEventListener('keydown',e=>{if(e.key==='Enter')executarRanking();});
+}
+
+function executarRanking(){
+  const tipo=document.getElementById('rk-tipo').value;
+  const val=document.getElementById('rk-input').value.trim();
+  if(!val){showToast('❌ Informe um termo',true);return;}
+  showToast('🏆 Rankeando vendas...');
+  const url=tipo==='categoria'?`/api/ranking-categoria?cat=${encodeURIComponent(val)}&limite=30`:`/api/ranking-busca?q=${encodeURIComponent(val)}&limite=30`;
+  fetch(url).then(r=>r.json()).then(d=>{
+    const res=document.getElementById('rk-result');
+    if(!d.ok){res.innerHTML=`<div style="background:#450a0a;color:#f87171;padding:10px;border-radius:5px">❌ ${d.erro}</div>`;return;}
+    res.innerHTML=renderRanking(d,tipo);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function renderRanking(d, tipo){
+  const titulo=tipo==='categoria'?`${d.categoria_nome||d.category_id}`:`"${d.query}"`;
+  const rows=(d.itens||[]).map((i,idx)=>{
+    const medal=idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'#'+(idx+1);
+    return `<tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:4px 5px;text-align:center;font-weight:700;color:#fbbf24;width:30px">${medal}</td>
+      <td style="padding:4px 5px;width:36px">${i.thumbnail?`<img src="${i.thumbnail}" style="width:32px;height:32px;object-fit:cover;border-radius:3px">`:''}</td>
+      <td style="padding:4px 7px;max-width:220px">
+        <div style="color:#e4e6eb;font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${i.titulo}">${i.titulo}</div>
+        <div style="color:#8b92a5;font-size:.62rem">${i.seller_apelido||''} ${i.free_shipping?'· 🚚 grátis':''}</div>
+      </td>
+      <td style="padding:4px 7px;color:#4ade80;text-align:right;font-weight:700">R$ ${fmt(i.preco)}</td>
+      <td style="padding:4px 7px;color:#fbbf24;text-align:right;font-weight:800">${i.vendas_total}</td>
+      <td style="padding:4px 7px;color:#c084fc;text-align:right;font-weight:700">R$ ${fmt(i.receita_acum)}</td>
+      <td style="padding:4px 3px;white-space:nowrap">
+        <button onclick="espionarDoRanking('${i.item_id}')" style="background:#78350f;border:none;color:#fbbf24;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:.65rem">🕵️</button>
+        <a href="${i.link}" target="_blank" style="color:#667eea;font-size:.7rem;margin-left:2px">↗</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="background:#0a0e27;border-radius:6px;padding:10px;margin-top:6px">
+    <div style="color:#f472b6;font-weight:700;font-size:.88rem;margin-bottom:6px">🏆 Top ${d.retornados} em ${titulo}</div>
+    <div style="color:#8b92a5;font-size:.7rem;margin-bottom:8px">${(d.total_resultados_ml||0).toLocaleString('pt-BR')} anúncios no ML · ${d.gerado_em}</div>
+    <div style="max-height:420px;overflow-y:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th></th><th></th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Anúncio</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Preço</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Vendas</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Receita est.</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" style="padding:20px;text-align:center;color:#8b92a5">Sem resultados.</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function espionarDoRanking(itemId){
+  abrirEspiao();
+  setTimeout(()=>{document.getElementById('spy-input').value=itemId;executarSpy();},200);
 }
 
 // Fecha modal com Escape

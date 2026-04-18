@@ -17,6 +17,10 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# Benchmark do usuário: 1000 visitas devem gerar R$ 10.000 em vendas
+# => R$ 10,00 de receita por visita
+BENCHMARK_RS_VISITA = 10.0
+
 
 def visitas_vendedor(token_ml: str, user_id: str, dias: int = 30) -> dict:
     """Visitas agregadas a todos os anúncios do vendedor no período."""
@@ -158,15 +162,24 @@ def analise_completa(token_ml: str, user_id: str, dias: int = 30,
             d = detalhes.get(iid, {})
             v = int(visitas_map.get(iid, 0))
             vendas = int(d.get('sold_quantity', 0))
+            preco = float(d.get('price', 0) or 0)
             conversao = round((vendas / v) * 100, 2) if v > 0 else 0
+
+            # Benchmark R$/visita (meta = BENCHMARK_RS_VISITA)
+            receita_est = round(preco * vendas, 2)
+            rs_por_visita = round(receita_est / v, 2) if v > 0 else 0
+            atinge_benchmark = rs_por_visita >= BENCHMARK_RS_VISITA
 
             anuncios.append({
                 'id': iid,
                 'titulo': (d.get('title', '') or iid)[:70],
-                'preco': d.get('price', 0),
+                'preco': preco,
                 'visitas': v,
                 'vendas_total': vendas,
                 'conversao_pct': conversao,
+                'receita_est': receita_est,
+                'rs_por_visita': rs_por_visita,
+                'atinge_benchmark': atinge_benchmark,
                 'link': d.get('permalink', ''),
                 'thumbnail': d.get('thumbnail', ''),
             })
@@ -183,7 +196,14 @@ def analise_completa(token_ml: str, user_id: str, dias: int = 30,
 
         total_visitas_itens = sum(a['visitas'] for a in anuncios)
         total_vendas = sum(a['vendas_total'] for a in anuncios)
+        total_receita_est = round(sum(a['receita_est'] for a in anuncios), 2)
         conv_geral = round((total_vendas / total_visitas_itens) * 100, 2) if total_visitas_itens else 0
+
+        # Benchmark geral: R$ por visita médio
+        rs_visita_geral = round(total_receita_est / total_visitas_itens, 2) if total_visitas_itens else 0
+        atinge_benchmark_geral = rs_visita_geral >= BENCHMARK_RS_VISITA
+        # % de quanto falta/sobra frente ao benchmark
+        pct_benchmark = round((rs_visita_geral / BENCHMARK_RS_VISITA) * 100, 1) if BENCHMARK_RS_VISITA else 0
 
         return {
             'ok': True,
@@ -193,6 +213,11 @@ def analise_completa(token_ml: str, user_id: str, dias: int = 30,
             'total_anuncios_analisados': len(anuncios),
             'total_vendas_periodo': total_vendas,
             'conversao_media_pct': conv_geral,
+            'receita_estimada': total_receita_est,
+            'rs_por_visita': rs_visita_geral,
+            'benchmark_rs_visita': BENCHMARK_RS_VISITA,
+            'atinge_benchmark_geral': atinge_benchmark_geral,
+            'pct_benchmark': pct_benchmark,
             'top_anuncios': top,
             'sem_visitas': sem_visitas,
             'baixa_conversao': baixa_conv,
