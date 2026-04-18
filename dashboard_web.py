@@ -479,6 +479,106 @@ def api_saude_anuncios():
         return jsonify(monitorar_saude(ml.auth.access_token, ml.auth.user_id))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
 
+@app.route('/api/pedidos')
+@login_required
+def api_pedidos():
+    try:
+        from agente_pedidos import listar_pedidos
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        dias = int(request.args.get('dias', 30))
+        status = request.args.get('status', '')
+        return jsonify(listar_pedidos(token, user_id, dias, status))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/perguntas')
+@login_required
+def api_perguntas():
+    try:
+        from agente_perguntas import listar_perguntas
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        apenas = request.args.get('todas', '0') != '1'
+        return jsonify(listar_perguntas(token, user_id, apenas_nao_respondidas=apenas))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/responder-pergunta', methods=['POST'])
+@login_required
+def api_responder_pergunta():
+    try:
+        from agente_perguntas import responder_pergunta
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(responder_pergunta(token, d.get('question_id'), d.get('resposta', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/meus-anuncios')
+@login_required
+def api_meus_anuncios():
+    try:
+        from agente_anuncios import listar_anuncios
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        status = request.args.get('status', 'active')
+        offset = int(request.args.get('offset', 0))
+        return jsonify(listar_anuncios(token, user_id, status, 50, offset))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/pausar-anuncio', methods=['POST'])
+@login_required
+def api_pausar_anuncio():
+    try:
+        from agente_anuncios import pausar_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(pausar_anuncio(token, d.get('item_id', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/ativar-anuncio', methods=['POST'])
+@login_required
+def api_ativar_anuncio():
+    try:
+        from agente_anuncios import ativar_anuncio
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(ativar_anuncio(token, d.get('item_id', '')))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/atualizar-estoque', methods=['POST'])
+@login_required
+def api_atualizar_estoque():
+    try:
+        from agente_anuncios import atualizar_estoque
+        d = request.get_json() or {}
+        token, _ = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado'})
+        return jsonify(atualizar_estoque(token, d.get('item_id', ''), int(d.get('quantidade', 0))))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/reputacao')
+@login_required
+def api_reputacao():
+    try:
+        from agente_reputacao import obter_reputacao
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        return jsonify(obter_reputacao(token, user_id))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
+@app.route('/api/faturamento')
+@login_required
+def api_faturamento():
+    try:
+        from agente_faturamento import obter_faturamento
+        token, user_id = _get_ml_token()
+        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
+        periodo = request.args.get('periodo', '')
+        return jsonify(obter_faturamento(token, user_id, periodo))
+    except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
+
 # ════════════════════════════════════════════════════════════════════
 # PÁGINA DE CONFIGURAÇÕES
 # ════════════════════════════════════════════════════════════════════
@@ -749,6 +849,11 @@ tr:hover td{background:#1f2544}
   <button class="btn btn-yellow" onclick="abrirAlertaDiario()">📊 Alerta</button>
   <button class="btn btn-pink" onclick="abrirTendencias()">🔥 Tendências</button>
   <button class="btn btn-cyan" onclick="abrirSaude()">🏥 Saúde</button>
+  <button class="btn" style="background:#1d4ed8;color:#fff" onclick="abrirPedidos()">🛒 Pedidos</button>
+  <button class="btn" style="background:#7c2d12;color:#fff" onclick="abrirPerguntas()">❓ Perguntas</button>
+  <button class="btn" style="background:#134e4a;color:#fff" onclick="abrirMeusAnuncios()">📋 Anúncios</button>
+  <button class="btn" style="background:#3b0764;color:#fff" onclick="abrirReputacao()">⭐ Reputação</button>
+  <button class="btn" style="background:#1c1917;color:#fbbf24;border:1px solid #78350f" onclick="abrirFaturamento()">💰 Faturamento</button>
   <button class="btn btn-green" onclick="mostrarModalProduto()">➕ Produto</button>
   <button class="btn btn-blue" onclick="exportar()">📥 Excel</button>
   <button class="btn btn-gray" onclick="window.location='/escolhidos'">⭐ Escolhidos ({{ stats.escolhidos }})</button>
@@ -1224,6 +1329,324 @@ function mostrarModalSaude(d){
     ${renderL(d.unhealthy,'Críticos — Perdendo Exposição','#f87171','🚨')}
     ${renderL(d.warning,'Em Risco','#fbbf24','⚠️')}
     ${renderL(d.sem_visitas,'Sem Visitas (30 dias)','#8b92a5','👻')}
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Pedidos ───────────────────────────────────────────────────────
+function abrirPedidos(dias=30, statusFiltro=''){
+  showToast('🛒 Carregando pedidos...');
+  fetch(`/api/pedidos?dias=${dias}&status=${statusFiltro}`)
+  .then(r=>r.json()).then(d=>{ if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalPedidos(d); })
+  .catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalPedidos(d){
+  const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+  const rows=(d.pedidos||[]).map(p=>`
+    <tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:4px 7px;color:${p.status_cor};font-size:.8rem">${p.status_icone} ${p.status_label}</td>
+      <td style="padding:4px 7px;color:#8b92a5;font-size:.72rem;white-space:nowrap">${p.data}</td>
+      <td style="padding:4px 7px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.titulo}">${p.titulo}</td>
+      <td style="padding:4px 7px;color:#8b92a5;font-size:.75rem">${p.comprador}</td>
+      <td style="padding:4px 7px;color:#fbbf24;text-align:right">x${p.qtd}</td>
+      <td style="padding:4px 7px;color:#4ade80;text-align:right;font-weight:700">R$ ${fmt2(p.valor_pago)}</td>
+    </tr>`).join('');
+
+  const statusOpts=['','paid','shipped','delivered','cancelled'].map(s=>{
+    const lab={'':`Todos (${d.total_ml})`,paid:'Pago',shipped:'Enviado',delivered:'Entregue',cancelled:'Cancelado'}[s]||s;
+    return `<option value="${s}">${lab}</option>`;
+  }).join('');
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #1d4ed8;width:900px;max-height:85vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#60a5fa">🛒 Pedidos — últimos ${d.periodo_dias} dias</h3>
+      <div style="color:#8b92a5;font-size:.72rem">${d.total_ml} pedidos no total · ${d.gerado_em}</div></div>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Total Período</div><div style="font-size:1.3rem;font-weight:700;color:#4ade80">R$ ${fmt2(d.total_valor)}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Pedidos Hoje</div><div style="font-size:1.3rem;font-weight:700;color:#60a5fa">${d.qtd_hoje}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Semana (R$)</div><div style="font-size:1.3rem;font-weight:700;color:#fbbf24">R$ ${fmt2(d.val_semana)}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Carregados</div><div style="font-size:1.3rem;font-weight:700;color:#c084fc">${d.total_processados}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <select id="ped-dias" style="background:#1a1f3a;border:1px solid #2d3452;color:#e4e6eb;padding:4px 8px;border-radius:4px;font-size:.78rem">
+        <option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="90">90 dias</option>
+      </select>
+      <select id="ped-status" style="background:#1a1f3a;border:1px solid #2d3452;color:#e4e6eb;padding:4px 8px;border-radius:4px;font-size:.78rem">${statusOpts}</select>
+      <button class="btn btn-blue" style="padding:4px 12px" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirPedidos(document.getElementById('ped-dias').value,document.getElementById('ped-status').value)">Filtrar</button>
+    </div>
+    <div style="overflow-y:auto;max-height:400px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Status</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Data</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Produto</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:left">Comprador</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Qtd</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Valor</th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="6" style="padding:20px;text-align:center;color:#8b92a5">Nenhum pedido encontrado.</td></tr>'}</tbody>
+    </table></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Perguntas ─────────────────────────────────────────────────────
+function abrirPerguntas(todas=false){
+  showToast('❓ Carregando perguntas...');
+  fetch(`/api/perguntas?todas=${todas?1:0}`)
+  .then(r=>r.json()).then(d=>{ if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalPerguntas(d,todas); })
+  .catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalPerguntas(d, todas=false){
+  const rows=(d.perguntas||[]).map(p=>`
+    <tr id="perg-row-${p.id}" style="border-bottom:1px solid #1a1f3a;${p.respondida?'opacity:.6':''}">
+      <td style="padding:5px 7px;color:#8b92a5;font-size:.7rem;white-space:nowrap">${p.data}</td>
+      <td style="padding:5px 7px;color:#e4e6eb;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem" title="${p.item_titulo}">${p.item_titulo||p.item_id}</td>
+      <td style="padding:5px 7px;color:#e4e6eb;font-size:.8rem">${p.texto}</td>
+      <td style="padding:5px 7px;color:#8b92a5;font-size:.7rem">${p.from_user}</td>
+      <td style="padding:5px 7px;min-width:240px">
+        ${p.respondida
+          ? `<span style="color:#4ade80;font-size:.72rem">✅ ${p.resposta_texto.substring(0,80)}${p.resposta_texto.length>80?'...':''}</span>`
+          : `<div style="display:flex;gap:4px">
+               <input id="resp-${p.id}" placeholder="Digite sua resposta..." style="flex:1;background:#0a0e27;border:1px solid #2d3452;color:#e4e6eb;padding:4px 6px;border-radius:4px;font-size:.75rem">
+               <button onclick="enviarResposta(${p.id})" style="background:#059669;border:none;color:#fff;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:.72rem;white-space:nowrap">Enviar</button>
+             </div>`}
+      </td>
+    </tr>`).join('');
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #b45309;width:1000px;max-height:85vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#fbbf24">❓ Perguntas ${todas?'(Todas)':'Sem Resposta'}</h3>
+      <div style="color:#8b92a5;font-size:.72rem">${d.total} total · <span style="color:${d.nao_respondidas>0?'#f87171':'#4ade80'}">${d.nao_respondidas} sem resposta</span> · ${d.gerado_em}</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-gray" style="font-size:.72rem" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirPerguntas(${!todas})">${todas?'Ver Pendentes':'Ver Todas'}</button>
+        <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:520px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th style="padding:5px 7px;color:#8b92a5">Data</th>
+        <th style="padding:5px 7px;color:#8b92a5">Anúncio</th>
+        <th style="padding:5px 7px;color:#8b92a5">Pergunta</th>
+        <th style="padding:5px 7px;color:#8b92a5">De</th>
+        <th style="padding:5px 7px;color:#8b92a5">Resposta</th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" style="padding:20px;text-align:center;color:#4ade80">✅ Nenhuma pergunta pendente!</td></tr>'}</tbody>
+    </table></div>
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function enviarResposta(qid){
+  const inp=document.getElementById('resp-'+qid);
+  if(!inp||!inp.value.trim()){showToast('❌ Digite uma resposta',true);return;}
+  const texto=inp.value.trim();
+  inp.disabled=true;
+  fetch('/api/responder-pergunta',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({question_id:qid,resposta:texto})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){
+      const row=document.getElementById('perg-row-'+qid);
+      if(row){
+        row.style.opacity='.6';
+        const td=row.querySelector('td:last-child');
+        if(td) td.innerHTML=`<span style="color:#4ade80;font-size:.72rem">✅ ${texto.substring(0,80)}</span>`;
+      }
+      showToast('✅ Resposta enviada!');
+    } else {
+      inp.disabled=false;
+      showToast('❌ '+d.erro,true);
+    }
+  }).catch(()=>{inp.disabled=false;showToast('❌ Erro',true);});
+}
+
+// ── Meus Anúncios ─────────────────────────────────────────────────
+function abrirMeusAnuncios(status='active', offset=0){
+  showToast('📋 Carregando anúncios...');
+  fetch(`/api/meus-anuncios?status=${status}&offset=${offset}`)
+  .then(r=>r.json()).then(d=>{ if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalAnuncios(d,status,offset); })
+  .catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalAnuncios(d, statusAtual, offset){
+  const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+  const rows=(d.anuncios||[]).map(a=>`
+    <tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:4px 6px;width:32px">${a.thumbnail?`<img src="${a.thumbnail}" style="width:28px;height:28px;object-fit:cover;border-radius:3px">`:'📦'}</td>
+      <td style="padding:4px 7px;color:#e4e6eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem" title="${a.titulo}">${a.titulo}</td>
+      <td style="padding:4px 7px;color:#4ade80;text-align:right;font-weight:700">R$ ${fmt2(a.preco)}</td>
+      <td style="padding:4px 7px;text-align:center"><span style="color:${a.estoque>5?'#4ade80':a.estoque>0?'#fbbf24':'#f87171'};font-weight:700">${a.estoque}</span></td>
+      <td style="padding:4px 7px;color:#fbbf24;text-align:center">${a.vendas}</td>
+      <td style="padding:4px 7px;font-size:.72rem">${a.tipo_icone} ${a.tipo_label}</td>
+      <td style="padding:4px 7px;color:${a.status_cor};font-size:.72rem">${a.status==='active'?'🟢 Ativo':a.status==='paused'?'🟡 Pausado':'🔴 '+a.status}</td>
+      <td style="padding:4px 4px;white-space:nowrap">
+        ${a.status==='active'
+          ? `<button onclick="acaoAnuncio('pausar','${a.id}',this)" style="background:#78350f;border:none;color:#fbbf24;padding:2px 7px;border-radius:3px;cursor:pointer;font-size:.7rem">⏸ Pausar</button>`
+          : `<button onclick="acaoAnuncio('ativar','${a.id}',this)" style="background:#064e3b;border:none;color:#4ade80;padding:2px 7px;border-radius:3px;cursor:pointer;font-size:.7rem">▶ Ativar</button>`}
+        <a href="${a.link}" target="_blank" style="color:#667eea;font-size:.72rem;margin-left:4px">↗</a>
+      </td>
+    </tr>`).join('');
+
+  const total=d.total||0;
+  const pagAtual=Math.floor(offset/50)+1;
+  const totalPags=Math.ceil(total/50);
+  const navPag=totalPags>1?`
+    <div style="display:flex;gap:6px;justify-content:center;margin-top:8px">
+      ${offset>0?`<button class="btn btn-gray" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirMeusAnuncios('${statusAtual}',${offset-50})">← Anterior</button>`:''}
+      <span style="color:#8b92a5;padding:4px 8px;font-size:.78rem">${pagAtual}/${totalPags}</span>
+      ${offset+50<total?`<button class="btn btn-gray" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirMeusAnuncios('${statusAtual}',${offset+50})">Próxima →</button>`:''}
+    </div>`:'';
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #134e4a;width:950px;max-height:85vh" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#34d399">📋 Meus Anúncios ML</h3>
+      <div style="color:#8b92a5;font-size:.72rem">${total} anúncios · mostrando ${d.retornados} · ${d.gerado_em}</div></div>
+      <div style="display:flex;gap:6px">
+        <select id="an-status" style="background:#1a1f3a;border:1px solid #2d3452;color:#e4e6eb;padding:4px 8px;border-radius:4px;font-size:.78rem">
+          <option value="active" ${statusAtual==='active'?'selected':''}>Ativos</option>
+          <option value="paused" ${statusAtual==='paused'?'selected':''}>Pausados</option>
+          <option value="closed" ${statusAtual==='closed'?'selected':''}>Fechados</option>
+        </select>
+        <button class="btn btn-cyan" onclick="const bg=this.closest('.modal-bg');bg.remove();abrirMeusAnuncios(document.getElementById('an-status').value,0)">Filtrar</button>
+        <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:500px">
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;font-size:.8rem">
+      <thead><tr style="border-bottom:1px solid #2d3452;position:sticky;top:0;background:#0a0e27">
+        <th style="padding:5px 6px;color:#8b92a5;width:32px"></th>
+        <th style="padding:5px 7px;color:#8b92a5">Título</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:right">Preço</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:center">Estoque</th>
+        <th style="padding:5px 7px;color:#8b92a5;text-align:center">Vendas</th>
+        <th style="padding:5px 7px;color:#8b92a5">Tipo</th>
+        <th style="padding:5px 7px;color:#8b92a5">Status</th>
+        <th style="padding:5px 7px;color:#8b92a5">Ações</th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" style="padding:20px;text-align:center;color:#8b92a5">Nenhum anúncio encontrado.</td></tr>'}</tbody>
+    </table></div>
+    ${navPag}
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+function acaoAnuncio(acao, itemId, btn){
+  btn.disabled=true; btn.textContent='⏳';
+  const url=acao==='pausar'?'/api/pausar-anuncio':'/api/ativar-anuncio';
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_id:itemId})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){ showToast('✅ '+d.msg); setTimeout(()=>abrirMeusAnuncios(),600); }
+    else { btn.disabled=false; btn.textContent=acao==='pausar'?'⏸ Pausar':'▶ Ativar'; showToast('❌ '+d.erro,true); }
+  }).catch(()=>{btn.disabled=false;showToast('❌ Erro',true);});
+}
+
+// ── Reputação ─────────────────────────────────────────────────────
+function abrirReputacao(){
+  showToast('⭐ Carregando reputação...');
+  fetch('/api/reputacao').then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalReputacao(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalReputacao(d){
+  const fmt1=v=>v!=null?parseFloat(v).toFixed(1).replace('.',','):'0,0';
+  const metricaBloco=(label,valor,max,cor)=>{
+    const pct=Math.min(100,(valor/max)*100);
+    const bcor=valor>=(max*0.7)?'#f87171':valor>=(max*0.4)?'#fbbf24':'#4ade80';
+    return `<div style="background:#0a0e27;padding:10px;border-radius:6px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:.72rem;color:#8b92a5">${label}</span>
+        <span style="font-size:.85rem;font-weight:700;color:${bcor}">${fmt1(valor)}%</span>
+      </div>
+      <div style="background:#2d3452;border-radius:3px;height:5px">
+        <div style="background:${bcor};height:5px;border-radius:3px;width:${pct}%"></div>
+      </div>
+    </div>`;
+  };
+  const alertasH=(d.alertas||[]).map(a=>`
+    <div style="background:${a.tipo==='critico'?'#450a0a':a.tipo==='aviso'?'#3b2700':'#064e3b'};border-radius:5px;padding:8px 12px;display:flex;align-items:center;gap:8px">
+      <span>${a.icone}</span><span style="color:${a.cor};font-size:.82rem">${a.msg}</span>
+    </div>`).join('');
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #7c3aed;width:680px" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div>
+        <h3 style="color:#c084fc">⭐ Reputação do Vendedor</h3>
+        <div style="color:#8b92a5;font-size:.72rem">${d.apelido} ${d.power_icone} ${d.power_label} · ${d.gerado_em}</div>
+      </div>
+      <div style="text-align:center;padding:8px 16px;background:#0a0e27;border-radius:8px">
+        <div style="font-size:2rem">${d.nivel_icone}</div>
+        <div style="font-size:.82rem;font-weight:700;color:${d.nivel_cor}">${d.nivel_label}</div>
+      </div>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">${alertasH}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Transações</div><div style="font-size:1.4rem;font-weight:800;color:#667eea">${d.total_transacoes||0}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Completas</div><div style="font-size:1.4rem;font-weight:800;color:#4ade80">${d.transacoes_completas||0}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Avaliação +</div><div style="font-size:1.4rem;font-weight:800;color:#fbbf24">${d.pct_positivo||0}%</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+      ${metricaBloco('Cancelamentos',d.pct_cancelamentos,5,'#f87171')}
+      ${metricaBloco('Atrasos Envio',d.pct_atrasos,15,'#fbbf24')}
+      ${metricaBloco('Reclamações',d.pct_reclamacoes,5,'#f87171')}
+    </div>
+    ${d.quota_anuncios?`<div style="background:#0a0e27;padding:10px;border-radius:6px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:.78rem;color:#8b92a5">Capacidade de Anúncios</span>
+      <span style="font-size:.85rem"><span style="color:#4ade80;font-weight:700">${d.anuncios_ativos}</span><span style="color:#8b92a5"> / ${d.quota_anuncios} (${d.slots_livres} livres)</span></span>
+    </div>`:''}
+  </div></div>`;
+  document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+
+// ── Faturamento ───────────────────────────────────────────────────
+function abrirFaturamento(){
+  showToast('💰 Carregando faturamento...');
+  fetch('/api/faturamento').then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast('❌ '+d.erro,true);return;} mostrarModalFaturamento(d);
+  }).catch(()=>showToast('❌ Erro',true));
+}
+
+function mostrarModalFaturamento(d){
+  const fmt2=v=>v!=null?parseFloat(v).toFixed(2).replace('.',','):'0,00';
+  const linhasH=(d.linhas||[]).map(l=>`
+    <tr style="border-bottom:1px solid #1a1f3a">
+      <td style="padding:5px 10px;color:#e4e6eb;font-size:.8rem">${l.nome}</td>
+      <td style="padding:5px 10px;color:${l.cor};font-weight:700;text-align:right;font-size:.85rem">${l.valor>=0?'+':''} R$ ${fmt2(Math.abs(l.valor))}</td>
+    </tr>`).join('');
+
+  const corSaldo=d.saldo>=0?'#4ade80':'#f87171';
+  const nota=d.nota?`<div style="background:#1e3a5f;border-radius:5px;padding:8px 12px;font-size:.75rem;color:#93c5fd;margin-bottom:10px">ℹ️ ${d.nota}</div>`:'';
+
+  const h=`<div class="modal-bg" onclick="this.remove()"><div class="modal" style="border:1px solid #78350f;width:600px" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div><h3 style="color:#fbbf24">💰 Faturamento ML</h3>
+      <div style="color:#8b92a5;font-size:.72rem">Período: ${d.periodo_key} · ${d.gerado_em}</div></div>
+      <button class="btn btn-gray" onclick="this.closest('.modal-bg').remove()">✕</button>
+    </div>
+    ${nota}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+      <div style="background:#450a0a;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Cobrado</div><div style="font-size:1.2rem;font-weight:700;color:#f87171">R$ ${fmt2(d.total_cobrado)}</div></div>
+      <div style="background:#064e3b;padding:10px;border-radius:6px;text-align:center"><div style="font-size:.6rem;color:#8b92a5">Créditos</div><div style="font-size:1.2rem;font-weight:700;color:#4ade80">R$ ${fmt2(d.total_credito)}</div></div>
+      <div style="background:#0a0e27;padding:10px;border-radius:6px;text-align:center;border:1px solid ${corSaldo}40"><div style="font-size:.6rem;color:#8b92a5">Saldo</div><div style="font-size:1.2rem;font-weight:700;color:${corSaldo}">R$ ${fmt2(d.saldo)}</div></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;background:#0a0e27;border-radius:6px;overflow:hidden">
+      <thead><tr style="border-bottom:1px solid #2d3452">
+        <th style="padding:6px 10px;color:#8b92a5;text-align:left;font-size:.75rem">Descrição</th>
+        <th style="padding:6px 10px;color:#8b92a5;text-align:right;font-size:.75rem">Valor</th>
+      </tr></thead>
+      <tbody>${linhasH||'<tr><td colspan="2" style="padding:20px;text-align:center;color:#8b92a5">Sem dados de faturamento.</td></tr>'}</tbody>
+    </table>
   </div></div>`;
   document.querySelectorAll('.modal-bg').forEach(m=>m.remove());
   document.body.insertAdjacentHTML('beforeend',h);
