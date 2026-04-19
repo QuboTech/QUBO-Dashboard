@@ -79,10 +79,14 @@ def _carregar_token_db(tenant_id: str = 'qubo') -> dict:
         ph = "%s" if USAR_POSTGRES else "?"
         cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", (tenant_id,))
         row = cur.fetchone()
-        # Fallback legacy: se não encontrou pelo tenant_id e for qubo, tenta 'principal'
-        if not row and tenant_id == 'qubo':
+        # Fallback legacy: se não encontrou OU a linha existe porém sem access_token,
+        # e for o tenant qubo, tenta a linha legada 'principal' (compat pré-multi-tenant).
+        if tenant_id == 'qubo' and (not row or not row[0]):
             cur.execute(f"SELECT access_token, refresh_token, user_id, expires_at FROM ml_tokens WHERE id = {ph}", ('principal',))
-            row = cur.fetchone()
+            legacy = cur.fetchone()
+            if legacy and legacy[0]:
+                row = legacy
+                logger.info("🟡 ML: token carregado via fallback 'principal' (migração principal→qubo ainda não aplicada)")
         conn.close()
         if row:
             return {

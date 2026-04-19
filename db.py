@@ -10,7 +10,10 @@ Modos de conexão:
 import os
 import re
 import sqlite3
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL  = os.getenv("DATABASE_URL", "")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY", "")
@@ -283,7 +286,11 @@ def garantir_schema():
         # Migração: row 'principal' legado vira 'qubo' (se ainda não existir 'qubo')
         try:
             cur.execute("UPDATE ml_tokens SET id='qubo', tenant_id='qubo' WHERE id='principal' AND NOT EXISTS (SELECT 1 FROM ml_tokens WHERE id='qubo')")
-        except Exception: pass
+            rc = getattr(cur, 'rowcount', 0) or 0
+            if rc > 0:
+                logger.info(f"✅ Migração ml_tokens: 'principal' → 'qubo' aplicada ({rc} linha)")
+        except Exception as e:
+            logger.warning(f"⚠️ Migração ml_tokens principal→qubo falhou (ignorando, fallback em runtime cobre): {e}")
 
         # ═══════════════════════════════════════════════════════════════
         # MULTI-TENANT: tabelas tenants + usuarios

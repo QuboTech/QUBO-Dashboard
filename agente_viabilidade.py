@@ -101,10 +101,11 @@ def analisar_viabilidade(
         margem_minima: margem mínima desejada (%)
         produto_id: id no banco QUBO (opcional)
     """
-    headers = {"Authorization": f"Bearer {token_ml}"}
+    # Token é opcional: busca pública funciona sem ele (fallback para anúncios sem auth)
+    headers = {"Authorization": f"Bearer {token_ml}"} if token_ml else {}
 
     # ── 1. Busca produtos no ML ───────────────────────────────────────
-    eh_item_id = termo_ou_id.upper().startswith("MLB")
+    eh_item_id = (termo_ou_id or "").upper().startswith("MLB")
 
     if eh_item_id:
         # Busca direta pelo ID
@@ -112,6 +113,9 @@ def analisar_viabilidade(
             f"https://api.mercadolibre.com/items/{termo_ou_id}",
             headers=headers, timeout=15
         )
+        if r.status_code in (401, 403) and headers:
+            # tenta sem token (endpoint público)
+            r = requests.get(f"https://api.mercadolibre.com/items/{termo_ou_id}", timeout=15)
         if r.status_code != 200:
             return {"ok": False, "erro": f"Item {termo_ou_id} não encontrado"}
         item = r.json()
@@ -128,8 +132,14 @@ def analisar_viabilidade(
             params={"q": termo_busca, "limit": 20, "sort": "relevance"},
             timeout=15
         )
-        if r.status_code == 401:
-            return {"ok": False, "erro": "Token ML expirado. Reconecte em ML Auth."}
+        if r.status_code in (401, 403) and headers:
+            # Token inválido — tenta sem autenticação (search ML é público)
+            headers = {}
+            r = requests.get(
+                "https://api.mercadolibre.com/sites/MLB/search",
+                params={"q": termo_busca, "limit": 20, "sort": "relevance"},
+                timeout=15
+            )
         if r.status_code != 200:
             return {"ok": False, "erro": f"Erro API ML: {r.status_code}"}
 

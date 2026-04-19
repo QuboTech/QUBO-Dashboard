@@ -18,9 +18,12 @@ from auth import (login_required, admin_required, get_tenant_id, get_usuario_nom
                   get_tenant_info, LOGIN_HTML, SIGNUP_HTML)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "vitrix-secret-2026")
+_sk_env = os.getenv("SECRET_KEY")
+app.secret_key = _sk_env or "vitrix-secret-2026"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+if not _sk_env:
+    logger.warning("⚠️ SECRET_KEY não definido no env — usando default. Defina no Render para que sessões persistam entre deploys.")
 
 # ── Filtro Jinja ─────────────────────────────────────────────────────
 @app.template_filter('br')
@@ -526,9 +529,8 @@ def api_viabilidade():
     try:
         from agente_viabilidade import analisar_viabilidade
         d = request.get_json()
-        token, _ = _get_ml_token()
-        if not token: return jsonify({'ok': False, 'erro': 'ML não conectado. Conecte em Config → ML Auth'})
-        return jsonify(analisar_viabilidade(d.get('termo',''), token,
+        token, _ = _get_ml_token()  # token opcional — busca ML é pública; sem token taxa real fica degradada
+        return jsonify(analisar_viabilidade(d.get('termo',''), token or "",
             float(d.get('custo',0)), float(d.get('peso',0)), float(d.get('embalagem',0)),
             float(d.get('imposto',0)), float(d.get('margem_minima',20)), d.get('id')))
     except Exception as e: return jsonify({'ok': False, 'erro': str(e)})
@@ -937,9 +939,11 @@ def api_ml_status():
         ml = MLBuscador(tenant_id=get_tenant_id())
         auth = ml.auth
         exp_str = auth.expires_at.isoformat() if auth.expires_at else None
+        _aut = ml.esta_autenticado()
         return jsonify({
             'ok': True,
-            'autenticado': ml.esta_autenticado(),
+            'autenticado': _aut,
+            'conectado': _aut,   # alias compat
             'user_id': auth.user_id,
             'tem_access_token': bool(auth.access_token),
             'tem_refresh_token': bool(auth.refresh_token),
@@ -957,17 +961,25 @@ def api_ml_debug():
         conn = get_conn(); cur = conn.cursor()
         ph = "%s" if USAR_POSTGRES else "?"
         cur.execute(f"SELECT id, user_id, expires_at, salvo_em, length(access_token), length(refresh_token) FROM ml_tokens WHERE id = {ph}", (get_tenant_id(),))
-        row = cur.fetchone(); conn.close()
+        row = cur.fetchone()
+        # também pega a linha 'principal' (legado) se existir — útil pra ver se migração rolou
+        cur.execute(f"SELECT id, user_id, expires_at, salvo_em, length(access_token), length(refresh_token) FROM ml_tokens WHERE id = {ph}", ('principal',))
+        row_principal = cur.fetchone(); conn.close()
         db_info = None
         if row:
-            db_info = {'user_id': row[2], 'expires_at': row[3], 'salvo_em': row[4], 'len_access': row[5], 'len_refresh': row[6]}
+            db_info = {'id': row[0], 'user_id': row[1], 'expires_at': row[2], 'salvo_em': row[3], 'len_access': row[4], 'len_refresh': row[5]}
+        db_info_principal = None
+        if row_principal:
+            db_info_principal = {'id': row_principal[0], 'user_id': row_principal[1], 'expires_at': row_principal[2], 'salvo_em': row_principal[3], 'len_access': row_principal[4], 'len_refresh': row_principal[5]}
         from ml_buscador import MLBuscador, _carregar_token_db
         loaded = _carregar_token_db(get_tenant_id())
         ml = MLBuscador(tenant_id=get_tenant_id())
         from datetime import datetime
         return jsonify({
             'ok': True,
+            'tenant_slug': get_tenant_id(),
             'db': db_info,
+            'db_principal_legado': db_info_principal,
             'carregado': {
                 'tem_access': bool(loaded.get('access_token')),
                 'tem_refresh': bool(loaded.get('refresh_token')),
@@ -1750,12 +1762,26 @@ function showToast(msg, erro=false){
 }
 
 // Status de conexão ML no hero
-fetch('/api/ml-status').then(r=>r.json()).then(d=>{
+fetch('/api/ml-status').then(r=>{
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}).then(d=>{
   const el = document.getElementById('ml-status');
   if(!el) return;
-  if(d.conectado){ el.textContent = '✅ Conectado: ' + (d.apelido || d.user_id || 'OK'); el.style.color = '#4ade80'; }
-  else { el.textContent = '❌ Desconectado — acesse /config'; el.style.color = '#f87171'; }
-}).catch(()=>{});
+  if(d.autenticado || d.conectado){
+    el.textContent = '✅ Conectado: ' + (d.apelido || d.user_id || 'OK');
+    el.style.color = '#4ade80';
+  } else {
+    el.textContent = '❌ Desconectado — acesse /config';
+    el.style.color = '#f87171';
+  }
+}).catch(err=>{
+  const el = document.getElementById('ml-status');
+  if(el){
+    el.textContent = '⚠️ Falha ao checar status — recarregue ou faça login novamente';
+    el.style.color = '#f87171';
+  }
+});
 
 // ── Pedidos ───────────────────────────────────────────────────────
 function abrirPedidos(dias=30, statusFiltro=''){
